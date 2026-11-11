@@ -47,6 +47,7 @@ def load_notation():
 
 
 def check_lines(fname, lines, notation):
+    unregistered = set()
     for i, raw in enumerate(lines, 1):
         ln = raw.strip()
         if not ln:
@@ -64,11 +65,13 @@ def check_lines(fname, lines, notation):
                 continue
             err(fname, i, '圆括号元组被断言成行向量（圆括号=列向量，行向量用横排方括号）')
 
-        # R3 粗体向量符号必须在符号表登记
+        # R3 粗体符号必须在符号表登记。
+        # 判据必须比对 `\mathbf{name}` 原文 —— 早期写成 `name not in notation`，
+        # 单字母名在表里几乎必然出现（任意位置），实测 25 个名字报 0 个，等于没查。
         for m in re.finditer(r'\\mathbf\{([^}]+)\}', ln):
             name = m.group(1)
-            if f'\\mathbf{{{name}}}' not in notation and name not in notation:
-                warn(fname, i, f'\\mathbf{{{name}}} 未在 notation.md 登记')
+            if f'\\mathbf{{{name}}}' not in notation:
+                unregistered.add(name)
 
         # R4 无下标写法：Eij / lij / Pij
         for m in re.finditer(r'(?<![\\A-Za-z])([ElP])(ij|ji|kl)\b', ln):
@@ -77,6 +80,12 @@ def check_lines(fname, lines, notation):
         # R5 代码块里画矩阵（用分号或方括号堆数字）
         if re.search(r'\[\s*[\d\-]+\s+[\d\-]+', ln) and not ln.startswith('$$'):
             warn(fname, i, '疑似在正文/代码块里用字符画矩阵，应改用 bmatrix')
+
+    if unregistered:
+        # 聚合报一条：逐行报警会把整份文档刷满，反而没人看
+        warn(fname, 0,
+             '这些 \\mathbf{…} 没在 notation.md 登记：' + '、'.join(sorted(unregistered))
+             + '（新增符号先加表再用）')
 
 
 def check_structure(fname, text):

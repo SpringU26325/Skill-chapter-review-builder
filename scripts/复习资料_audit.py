@@ -71,3 +71,14 @@ print(f"m:t 中 U+1D400–1D7FF 字符 {uni_math} 个（应为 0）")
 print(f"m:t 中反斜杠 {backslash}、美元符 {dollar}（应为 0）；m:mtext {mtext}（应为 0）")
 print(f"m:t 中 NBSP {nbsp}（应为 0）、EM SPACE {emsp}（\\qquad 正常产物，不计入违规）")
 print(f"结构计数：m:d {d}、m:m {mm}、m:nary {nary}、m:eqArr {doc.count('<m:eqArr')}")
+
+# 分式类型：lin = Word 的「线性分式」，渲染成压扁的斜杠，不是上下堆叠。
+# 引擎在 add_math 里把 lin 统一提升为 bar，所以成品里 lin 必须为 0。
+ftypes = {}
+for body in re.findall(r'<m:f>(.*?)</m:f>', doc, re.S):
+    mt = re.search(r'<m:type m:val="(\w+)"', body)
+    k = mt.group(1) if mt else '缺 fPr(默认 bar)'
+    ftypes[k] = ftypes.get(k, 0) + 1
+lin = ftypes.get('lin', 0)
+summary = '、'.join(f'{k} {v}' for k, v in sorted(ftypes.items())) or '无分式'
+print(f"分式类型：{summary}（lin 应为 0；非 0 说明有分式被渲染成压扁的斜杠）")

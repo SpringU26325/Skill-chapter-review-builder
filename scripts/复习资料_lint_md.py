@@ -72,6 +72,47 @@ def _begin_in_inline_math(line):
     return any('\\begin{' in c for _, _, c in _inline_spans(line))
 
 
+def _multi_dfrac(line):
+    """一行里出现 ≥2 个行内 \\dfrac：每个都会挤成小号，且各自抬高行距。"""
+    return sum(c.count('\\dfrac') for _, _, c in _inline_spans(line)) >= 2
+
+
+def _long_inline_eq(line):
+    """行内公式 ≥80 字符且含 =：Word 里容易被折断。
+
+    不能用正则 `\\$[^$\\n]{80,}\\$`：遇到 `$$…$$` 块行，它会从第二个 `$` 配到
+    闭合 `$$` 的第一个 `$`，把每个长块级公式都当成行内公式（11-11 实测 38 章
+    共 460 行误报）。改用 _inline_spans，块级内容根本不进入判定。
+    """
+    return any(len(c) >= 80 and '=' in c for _, _, c in _inline_spans(line))
+
+
+def _frac_in_math(line):
+    r"""结构块里会撑高单行的写法，只查 $…$ 内部：\frac/\dfrac、斜杠除法。
+    不加 $ 的纯文本 a/b 不走公式转换，不报。"""
+    for _, _, c in _inline_spans(line):
+        if re.search(r'\\(d)?frac\b', c) or '/' in c:
+            return True
+    return False
+
+
+TREE_LINE_RE = re.compile(r'^\s*[│├└]')
+
+
+def _tree_rule_hits(s):
+    """结构块（本章脉络）里会破坏行距节奏的写法。
+
+    树块现在支持 $…$，公式进树后行高会随内容变化；堆叠分式与 \\limits
+    都会把单行撑高，整块缩进节奏立刻不齐。
+    """
+    hits = []
+    if _frac_in_math(s):
+        hits.append(r'结构块 $…$ 里的分式会变堆叠、撑高该行：改成不加 $ 的纯文本 a/b，或移出树')
+    if '\\limits' in s:
+        hits.append(r'结构块里 \limits 会把上下限压到下方、撑高行距，去掉 \limits')
+    return hits
+
+
 # (级别, 说明, 正则/判定函数)
 RULES = [
     ('ERROR', r'表格行内公式里出现裸 |（行内公式外的列分隔符不算），改 \vert',
@@ -92,14 +133,14 @@ RULES = [
      re.compile(r'^\s*:::\s*$')),  # 计数型规则，特殊处理见下
     ('WARN', r'\sqrt{单符号^{…}} 上标会跑到根号外，改写（如 \sqrt{x\cdot x}）',
      re.compile(r'\\sqrt\{[A-Za-z\\]\^\{')),
-    ('WARN', r'一行内多个行内 \dfrac 会被压成上标大小，答案分式改斜杠 A/B',
-     re.compile(r'^[^\\]*\$[^$\n]*\\dfrac')),
+    ('WARN', r'一行里 ≥2 个行内 \dfrac，各占一份行高，提到块级或拆行',
+     _multi_dfrac),
     ('WARN', r'\\text{…} 超 4 字，整句移到公式外',
      re.compile(r'\\text\{([^{}]{5,})\}')),
     ('WARN', r'U+2080 区下标字符出现在代码块/正文，写 v_1 或 v1',
      re.compile(r'[\u2080-\u209f\u2070-\u2079]')),
     ('WARN', r'长行内公式含 = 连等式，易被 Word 折断，拆短用文字连',
-     re.compile(r'\$[^$\n]{80,}\$')),
+     _long_inline_eq),
 ]
 
 
@@ -118,13 +159,35 @@ def _check_container_balance(text):
     return errs
 
 
+def _tree_code_lines(lines):
+    """按整块判定结构块，与引擎 _render_code 一致：块内任一行带树符即整块算树。
+    返回需要跑树规则的行号集合（1-based）；根行不带树符，也要覆盖到。"""
+    hit = set()
+    block, in_code = [], False
+    for i, line in enumerate(lines, 1):
+        s = line.strip()
+        if s.startswith(':::code'):
+            in_code, block = True, []
+            continue
+        if in_code and s == ':::':
+            if any(TREE_LINE_RE.match(ln) for ln in block):
+                hit.update(range(i - len(block), i))
+            in_code = False
+            continue
+        if in_code:
+            block.append(line)
+    return hit
+
+
 def check_file(path):
     with open(path, encoding='utf-8') as f:
         text = f.read()
     lines = text.splitlines()
+    tree_lines = _tree_code_lines(lines)
     n_err = n_warn = 0
     out = [f'=== {path}']
     for i, line in enumerate(lines, 1):
+        s = line.strip()
         for level, msg, pat in RULES:
             if callable(pat):
                 hit = pat(line)
@@ -140,6 +203,11 @@ def check_file(path):
                     n_warn += 1
                 out.append(f'  {tag} L{i}: {msg}')
                 out.append(f'        | {line.strip()[:100]}')
+        if i in tree_lines:
+            for msg in _tree_rule_hits(s):
+                n_warn += 1
+                out.append(f'  WARN  L{i}: {msg}')
+                out.append(f'        | {s[:100]}')
     for e in _check_container_balance(text):
         n_err += 1
         out.append(e)

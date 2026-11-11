@@ -206,6 +206,70 @@ def set_run(run, size=10.5, bold=False, color=BODY, font=CN_FONT, italic=False):
 
 XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
 CODE_MARK_RE = re.compile(r'(_\{[^}]*\}|\^\{[^}]*\})')
+CODE_INLINE_RE = re.compile(r'(\$[^$\n]+?\$)')
+TREE_LINE_RE = re.compile(r'^\s*[│├└]')                 # 有树符就当结构块
+TREE_PREFIX_RE = re.compile(r'^([│ ]*)([├└]─[ \t]*)?')
+
+def _force_bar(el):
+    """把 m:type=lin 的分式改回 bar。
+
+    latex2mathml 会把 `1/2`、`1/n`、`x/2` 这类**斜杠除法**转成 MathML 分式，
+    MML2OMML 再标成 `lin`（线性分式）——Word 渲染成压扁的斜杠，不是上下堆叠。
+    复习资料要的是「分数线在中间、分子分母各一边」，所以一律提升为 bar。
+    """
+    n = 0
+    for f in el.iter('{%s}f' % NS_M):
+        fPr = f.find('{%s}fPr' % NS_M)
+        if fPr is None:
+            continue
+        ty = fPr.find('{%s}type' % NS_M)
+        if ty is not None and ty.get('{%s}val' % NS_M) == 'lin':
+            ty.set('{%s}val' % NS_M, 'bar')
+            n += 1
+    return n
+
+
+_W_RPR_AFTER = ('w:szCs', 'w:color', 'w:spacing', 'w:w', 'w:kern', 'w:position',
+                'w:highlight', 'w:u', 'w:effect', 'w:bdr', 'w:shd', 'w:fitText',
+                'w:vertAlign', 'w:rtl', 'w:cs', 'w:em', 'w:lang',
+                'w:eastAsianLayout', 'w:specVanish')
+
+
+def _shrink_omml(el, pt):
+    """把 OMML 内每个 m:r 的字号压到 pt。
+
+    OMML 默认继承正文 10.5pt，直接塞进 8.6pt 的树行会比周围大一圈。
+    """
+    sz = str(int(round(pt * 2)))
+    for r in el.iter('{%s}r' % NS_M):
+        rPr = r.find(qn('w:rPr'))
+        if rPr is None:
+            rPr = OxmlElement('w:rPr')
+            t = r.find('{%s}t' % NS_M)
+            if t is not None:
+                t.addprevious(rPr)
+            else:
+                r.append(rPr)
+        for tag in ('w:sz', 'w:szCs'):
+            e = rPr.find(qn(tag))
+            if e is None:
+                e = OxmlElement(tag)
+            else:
+                rPr.remove(e)
+            e.set(qn('w:val'), sz)
+            if tag == 'w:sz':
+                first = next((c for c in rPr if c.tag in {qn(x) for x in _W_RPR_AFTER}), None)
+                if first is not None:
+                    first.addprevious(e)
+                else:
+                    rPr.append(e)
+            else:
+                szel = rPr.find(qn('w:sz'))
+                if szel is not None:
+                    szel.addnext(e)
+                else:
+                    rPr.append(e)
+
 
 def add_math(p, tex, size=None):
     try:
@@ -216,6 +280,7 @@ def add_math(p, tex, size=None):
         return
     for t in el.iter('{%s}t' % NS_M):
         t.set(XML_SPACE, 'preserve')
+    _force_bar(el)
     if not p.runs:
         # 段落里只有公式时，Word 会当成独立公式居中显示（表格单元格因此对不齐）；
         # 垫一个零宽字符把它压回行内，左对齐交给段落自身的 jc 决定。
@@ -459,6 +524,9 @@ class Builder:
         sp.paragraph_format.line_spacing = Pt(5)
 
     def _render_code(self, cell, lines, first):
+        if any(TREE_LINE_RE.match(ln) for ln in lines):
+            self._render_tree(cell, lines, first)
+            return
         for i, ln in enumerate(lines):
             p = first if i == 0 else cell.add_paragraph()
             pf = p.paragraph_format
@@ -466,23 +534,64 @@ class Builder:
             txt = ln.replace("⚠", "▲").replace("\t", "    ")
             self._code_line(p, txt if txt else " ")
 
-    def _code_line(self, p, txt):
-        """等宽行；支持 _{..} 下标 / ^{..} 上标，避免出现 Eij 这种"无下标"写法"""
+    def _render_tree(self, cell, lines, first):
+        """结构块（原「拓扑树」）：去掉 │ ├ └ ─，用缩进表达层级，行内支持 $…$。
+
+        层级 = 该行前导竖线个数 + 是否有 ├/└；没有树符的缩进续行沿用上一行层级。
+        纯竖线行（只用来画主干）直接丢弃——主干已经由缩进取代。
+        旧写法 `_{..}` / `^{..}` 仍然有效，不用改源稿。
+        """
+        p, prev_depth, wrote = first, 0, False
+        for ln in lines:
+            s = ln.replace("⚠", "▲").replace("\t", "    ")
+            m = TREE_PREFIX_RE.match(s)
+            bars = m.group(1).count("│")
+            branch = m.group(2) is not None
+            txt = s[m.end():].strip()
+            if not txt:
+                continue
+            depth = bars + (1 if branch else 0)
+            if depth == 0 and bars == 0 and not branch and wrote:
+                depth = prev_depth                      # 无树符的续行
+            prev_depth = depth
+            if wrote:
+                p = cell.add_paragraph()
+            wrote = True
+            pf = p.paragraph_format
+            pf.space_before = Pt(0); pf.space_after = Pt(0); pf.line_spacing = 1.14
+            pf.left_indent = Cm(0.58 * depth)
+            if depth == 0:
+                self._code_line(p, txt, 9.0, True, INK, CN_FONT)
+            elif depth == 1:
+                self._code_line(p, txt, 8.8, True, INK, CN_FONT)
+            else:
+                self._code_line(p, txt, 8.6, False, "2C3E50", CN_FONT)
+
+    def _code_line(self, p, txt, size=8.6, bold=False, color="2C3E50", font=MONO):
+        """等宽/结构行：支持 $…$ 行内公式与 _{..}/^{..}，避免 Eij 这种"无下标"写法"""
+        for part in CODE_INLINE_RE.split(txt):
+            if len(part) > 2 and part[0] == '$' and part[-1] == '$':
+                add_math(p, part[1:-1])
+                _shrink_omml(p._p[-1], size)            # 刚追加的 oMath 是末位子元素
+            elif part:
+                self._code_marks(p, part, size, bold, color, font)
+
+    def _code_marks(self, p, txt, size=8.6, bold=False, color="2C3E50", font=MONO):
         pos = 0
         for m in CODE_MARK_RE.finditer(txt):
             if m.start() > pos:
-                self._code_run(p, txt[pos:m.start()])
+                self._code_run(p, txt[pos:m.start()], size, bold, color, font)
             body = m.group(0)[2:-1]
-            r = self._code_run(p, body)
+            r = self._code_run(p, body, size, bold, color, font)
             r.font.subscript = (m.group(0)[0] == '_')
             r.font.superscript = (m.group(0)[0] == '^')
             pos = m.end()
         if pos < len(txt):
-            self._code_run(p, txt[pos:])
+            self._code_run(p, txt[pos:], size, bold, color, font)
 
-    def _code_run(self, p, txt):
+    def _code_run(self, p, txt, size=8.6, bold=False, color="2C3E50", font=MONO):
         r = p.add_run(txt)
-        set_run(r, 8.6, False, "2C3E50", MONO)
+        set_run(r, size, bold, color, font)
         _t = r._r.find(qn('w:t'))
         if _t is not None:
             _t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
@@ -715,7 +824,7 @@ def _char_style(ch):
         return 'i'
     return None
 
-def _mk_math_run(text, sty=None, nor=False):
+def _mk_math_run(text, sty=None, nor=False, sz=None):
     r = etree.Element('{%s}r' % NS_M, nsmap={'m': NS_M})
     rPr = etree.SubElement(r, '{%s}rPr' % NS_M)
     if nor:
@@ -731,6 +840,11 @@ def _mk_math_run(text, sty=None, nor=False):
     else:
         for k in ('ascii', 'hAnsi', 'cs'):
             f.set('{%s}%s' % (W_NS, k), MATH_FONT)
+    if sz:
+        # 结构块里的公式被压到 8.6pt，重建 run 时必须带上，否则字号被打回默认
+        for tag in ('sz', 'szCs'):
+            e = etree.SubElement(wRPr, '{%s}%s' % (W_NS, tag))
+            e.set('{%s}val' % W_NS, str(sz))
     t = etree.SubElement(r, '{%s}t' % NS_M)
     t.text = text
     t.set(XML_SPACE, 'preserve')
@@ -744,6 +858,12 @@ def polish_math(doc):
     for r in list(body.iter('{%s}r' % NS_M)):
         rPr = r.find('{%s}rPr' % NS_M)
         nor = rPr is not None and rPr.find('{%s}nor' % NS_M) is not None
+        wRPr = r.find('{%s}rPr' % W_NS)
+        sz = None
+        if wRPr is not None:
+            _sz = wRPr.find('{%s}sz' % W_NS)
+            if _sz is not None:
+                sz = _sz.get('{%s}val' % W_NS)     # 结构块里预设的小字号要带过去
         ts = r.findall('{%s}t' % NS_M)
         if not ts:
             continue
@@ -752,13 +872,13 @@ def polish_math(doc):
             # 空 run（多出现在 m:sSub 的空底数里，视觉不显示）：换成带字体的空 run，
             # 否则"缺 Cambria Math 的 run = 0"这条硬指标会被这 3 个空壳打破。
             parent, idx = r.getparent(), r.getparent().index(r)
-            parent.insert(idx, _mk_math_run('', None, nor))
+            parent.insert(idx, _mk_math_run('', None, nor, sz))
             parent.remove(r)
             continue
         parent, idx = r.getparent(), None
         idx = parent.index(r)
         if nor:
-            parent.insert(idx, _mk_math_run(text, nor=True))
+            parent.insert(idx, _mk_math_run(text, nor=True, sz=sz))
             parent.remove(r)
             continue
         base = None
@@ -778,7 +898,7 @@ def polish_math(doc):
             else:
                 groups.append((sty, [out]))
         for k, (sty, chars) in enumerate(groups):
-            parent.insert(idx + k, _mk_math_run(''.join(chars), sty))
+            parent.insert(idx + k, _mk_math_run(''.join(chars), sty, sz=sz))
         parent.remove(r)
 
 

@@ -159,7 +159,13 @@ def main():
 
     todo = []
     for subj, md, out in items:
-        if force or not os.path.exists(out) or os.path.getmtime(md) > os.path.getmtime(out):
+        # 记号表是每章共用的输入（构建时注入「记号约定」框），它变新了也要重建，
+        # 否则补完 notation.md 再跑增量会「无需重建」，成品里的记号框还是旧的。
+        src_mtime = os.path.getmtime(md)
+        nota = os.path.join(SRC, subj + '_notation.md')
+        if os.path.exists(nota):
+            src_mtime = max(src_mtime, os.path.getmtime(nota))
+        if force or not os.path.exists(out) or src_mtime > os.path.getmtime(out):
             todo.append((subj, md, out))
 
     if not todo:
