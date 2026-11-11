@@ -1,0 +1,19 @@
+# 本仓库只收 skill 包本身。宿主目录、工作区数据、产物一律不进。
+# 包内理论上只会有 md / py / ps1，以下为防御性排除。
+
+__pycache__/
+*.py[cod]
+
+# 渲染过程中间件（正常会写在 复习资料\_render 下，这里只防误落）
+.renderlog.txt
+.renderlist.txt
+.render_timeout
+.pdflist.txt
+p*.pdf
+
+# 编辑器与系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
