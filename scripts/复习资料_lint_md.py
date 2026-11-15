@@ -99,6 +99,26 @@ def _frac_in_math(line):
 TREE_LINE_RE = re.compile(r'^\s*[│├└]')
 
 
+BARE_MARK_RE = re.compile(r'[A-Za-z][_^][A-Za-z0-9]')
+
+
+def _bare_math_in_tree(s):
+    """树块（本章脉络）里裸写的 x_y / x^2 不会渲染，只认 $…$ 与 _{…}/^{…}。
+
+    11-15 实测：`f_u * u_x` 原样进 Word，整块脉络没有一条公式。
+    只查"裸下/上标"这一种，`sum=a+b` 这类 C 代码不含 _ ^，不会误伤；
+    `x_{y}` / `x^{2}` 已被 _code_marks 认得，不算裸写。
+    """
+    outside = re.sub(r'\$[^$\n]*\$', '', s)     # 先摘掉已经包好的公式
+    if '$' in s:
+        if BARE_MARK_RE.search(outside):
+            return [r'$…$ 外面还有裸写 x_y：一并包进 $…$，或改成 x_{y}']
+        return []
+    if BARE_MARK_RE.search(outside):
+        return [r'树块里裸写 x_y 不会变下标，包成 $x_y$（或写 x_{y}）']
+    return []
+
+
 def _tree_rule_hits(s):
     """结构块（本章脉络）里会破坏行距节奏的写法。
 
@@ -110,6 +130,7 @@ def _tree_rule_hits(s):
         hits.append(r'结构块 $…$ 里的分式会变堆叠、撑高该行：改成不加 $ 的纯文本 a/b，或移出树')
     if '\\limits' in s:
         hits.append(r'结构块里 \limits 会把上下限压到下方、撑高行距，去掉 \limits')
+    hits.extend(_bare_math_in_tree(s))
     return hits
 
 
