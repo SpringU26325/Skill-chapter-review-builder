@@ -250,6 +250,119 @@ def set_run(run, size=10.5, bold=False, color=BODY, font=CN_FONT, italic=False):
     rFonts.set(qn('w:hAnsi'), font)
     return run
 
+# ---------- 内部跳转：书签 / 超链接 / 大纲级别 ----------
+LINK = "1F5FA8"        # 链接蓝，与正文墨色区分但不抢眼
+_U_AFTER = ('w:effect', 'w:bdr', 'w:shd', 'w:fitText', 'w:vertAlign', 'w:rtl',
+            'w:cs', 'w:em', 'w:lang', 'w:eastAsianLayout', 'w:specVanish', 'w:oMath')
+_P_AFTER_OUTLINE = ('w:divId', 'w:cnfStyle', 'w:rPr', 'w:sectPr', 'w:pPrChange')
+
+
+def set_outline(p, lvl):
+    """给段落挂大纲级别：导航窗格可见，Word 的折叠三角也依赖它。"""
+    pPr = p._p.get_or_add_pPr()
+    old = pPr.find(qn('w:outlineLvl'))
+    if old is not None:
+        pPr.remove(old)
+    el = OxmlElement('w:outlineLvl')
+    el.set(qn('w:val'), str(lvl))
+    pPr.insert_element_before(el, *_P_AFTER_OUTLINE)
+
+
+def add_bookmark(p, name, bid):
+    """书签范围 = 整段。bookmarkStart 紧跟 pPr，bookmarkEnd 收在段尾。"""
+    start = OxmlElement('w:bookmarkStart')
+    start.set(qn('w:id'), str(bid))
+    start.set(qn('w:name'), name)
+    end = OxmlElement('w:bookmarkEnd')
+    end.set(qn('w:id'), str(bid))
+    pPr = p._p.find(qn('w:pPr'))
+    if pPr is not None:
+        pPr.addnext(start)
+    else:
+        p._p.insert(0, start)
+    p._p.append(end)
+
+
+def _underline(r):
+    el = getattr(r, '_element', r)          # Run 与裸 w:r 都能传
+    rPr = el.get_or_add_rPr()
+    u = rPr.find(qn('w:u'))
+    if u is None:
+        u = OxmlElement('w:u')
+        rPr.insert_element_before(u, *_U_AFTER)
+    u.set(qn('w:val'), 'single')
+
+
+def add_link(p, text, anchor, size=8.5, color=LINK, bold=False, font=CN_FONT):
+    """追加一段可点击文字。anchor 为书签名（同文档内跳转）。"""
+    r = p.add_run(text)
+    set_run(r, size, bold, color, font)
+    _underline(r)
+    h = OxmlElement('w:hyperlink')
+    h.set(qn('w:anchor'), anchor)
+    h.set(qn('w:history'), '1')
+    r._element.addprevious(h)
+    h.append(r._element)
+    return h
+
+
+def link_runs(p, anchor):
+    """把段内已有的连续 run 包成超链接，保持与公式的原有先后顺序。
+
+    逐个连续组包，不整段搬运：脉络行里夹着 oMath，数学对象不在 run 层级，
+    整段包进去会打乱「文字—公式—文字」的顺序。同一段可以有多个 hyperlink。
+    """
+    kids = list(p._p)
+    group = []
+
+    def flush():
+        nonlocal group
+        if not group:
+            return
+        h = OxmlElement('w:hyperlink')
+        h.set(qn('w:anchor'), anchor)
+        h.set(qn('w:history'), '1')
+        group[0].addprevious(h)
+        for r in group:
+            _underline(r)
+            h.append(r)
+        group = []
+
+    for k in kids:
+        if k.tag == qn('w:r'):
+            group.append(k)
+        else:
+            flush()
+    flush()
+
+
+NUM_RE = re.compile(r'^[*\s]*§?\s*(\d+(?:\.\d+)*)')
+ITEM_RE = re.compile(r'^\s*(?:[-*+]\s+|\d+[.)]\s+)?\**\s*【([^】]{2,60})】')
+
+
+def _nztxt(s):
+    """标题/脉络行的比较键：去公式、去「的」「§」、统一括号冒号、去装饰横线。"""
+    s = re.sub(r'\$[^$]*\$', '', s)
+    s = s.replace('§', '').replace('的', '').replace('**', '')
+    s = s.replace('（', '(').replace('）', ')').replace('：', ':')
+    s = re.sub(r'[─—–\s]+', '', s)
+    return s
+
+
+def _core(s):
+    """标题主干：「梯度：方向导数最大的那个方向」-> 梯度"""
+    n = _nztxt(s)
+    for sep in (':', '('):
+        if sep in n:
+            n = n.split(sep)[0]
+    return n
+
+
+def _item_label(text):
+    m = ITEM_RE.match(text.strip())
+    return m.group(1).strip() if m else ''
+
+
 XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
 CODE_MARK_RE = re.compile(r'(_\{[^}]*\}|\^\{[^}]*\})')
 CODE_INLINE_RE = re.compile(r'(\$[^$\n]+?\$)')
@@ -402,6 +515,17 @@ class Builder:
         self.doc = Document()
         self._page()
         self._styles()
+        # 跳转索引（render 里的 index_anchors 填充）
+        self._hlist = []       # [{lv,text,name,sec}]
+        self._hi = 0           # 标题消费游标
+        self._bid = 100        # 书签 id 自增
+        self._items = []       # 附录条目 [{label,disp,name,sec}]
+        self._qi = 0
+        self._qmap = {}        # '6.5' -> [item…]
+        self._in_appx = False
+        self._tree_links_on = False
+        self._nav_done = False
+        self.link_stat = {'tree': 0, 'tree_miss': [], 'q': 0, 'item': 0, 'item_miss': 0, 'nav': 0}
 
     def _page(self):
         s = self.doc.sections[0]
@@ -420,6 +544,217 @@ class Builder:
         pf.line_spacing = 1.32
         pf.space_before = Pt(0)
         pf.space_after = Pt(3)
+
+    # ---------- 跳转索引 ----------
+    def _next_id(self):
+        self._bid += 1
+        return self._bid
+
+    def index_anchors(self, blocks):
+        """预扫描：给标题与附录条目编号，供前置的脉络块提前指向后置的小节。"""
+        cur_sec, appx = None, False
+        for blk in blocks:
+            if blk[0] == 'raw':
+                s = blk[1].strip()
+                m = re.match(r'^(#{1,3})\s+(.*)$', s)
+                if m:
+                    lv, text = len(m.group(1)), m.group(2).strip()
+                    if lv == 2:
+                        appx = ('附录' in text or '题库' in text)
+                        n = NUM_RE.match(text)
+                        cur_sec = n.group(1) if n else None
+                    self._hlist.append({'lv': lv, 'text': text,
+                                        'name': '_Sec%d' % (len(self._hlist) + 1),
+                                        'sec': cur_sec if lv >= 2 else None})
+                    continue
+                if appx:
+                    self._index_item(s)
+            elif appx:
+                if blk[0] == 'box' and blk[2]:
+                    self._index_item(blk[2])
+                for t in blk[-1]:
+                    self._index_item(t)
+
+    def _index_item(self, s):
+        label = _item_label(s)
+        if not label:
+            return
+        # 只把「习题 6.5 第 1 题」里的 6.5 当节号；「习题 3.1」是题号，不是节号
+        sec = None
+        m = re.match(r'^[^\d]{0,12}?(\d+\.\d+)\s*第', label)
+        if m:
+            sec = m.group(1)
+        disp = label[label.index('第'):] if '第' in label else label
+        it = {'label': label, 'disp': disp,
+              'name': '_Q%d' % (len(self._items) + 1), 'sec': sec}
+        self._items.append(it)
+        if sec:
+            self._qmap.setdefault(sec, []).append(it)
+
+    def _next_hdr(self, lv, text):
+        if self._hi < len(self._hlist):
+            h = self._hlist[self._hi]
+            if h['lv'] == lv and h['text'] == text:
+                self._hi += 1
+                return h
+            for j in range(self._hi, len(self._hlist)):
+                if self._hlist[j]['lv'] == lv and self._hlist[j]['text'] == text:
+                    print('  !! 标题索引跳号: %s' % text)
+                    self._hi = j + 1
+                    return self._hlist[j]
+            print('  !! 标题未入索引: %s' % text)
+        return None
+
+    @staticmethod
+    def _nums(line):
+        """脉络行里出现的节号：行首 `§6.5`、括号里的 `（2.3）`。"""
+        out = []
+        m = re.match(r'^[*\s]*§?\s*(\d+(?:\.\d+)*)', line)
+        if m:
+            out.append(m.group(1))
+        m = re.search(r'[（(]\s*(\d+(?:\.\d+)*)', line)
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+        return out
+
+    def _match(self, line, strict=False):
+        n = _nztxt(line)
+        if not n:
+            return None
+        exact = [h for h in self._hlist if _nztxt(h['text']) == n]
+        if len(exact) == 1:
+            return exact[0]['name']
+        for num in self._nums(line):
+            hit = [h for h in self._hlist
+                   if re.match(r'^\s*' + re.escape(num) + r'(?![\d.])', h['text'])]
+            if len(hit) == 1:
+                return hit[0]['name']
+        core = _core(line)
+        if len(core) >= 2:
+            hit = [h for h in self._hlist if _core(h['text']) == core]
+            if len(hit) == 1:
+                return hit[0]['name']
+            hit = [h for h in self._hlist if len(_core(h['text'])) >= 3 and _core(h['text']) in n]
+            if len(hit) == 1:
+                return hit[0]['name']
+            hit = [h for h in self._hlist if core in _nztxt(h['text'])]
+            if len(hit) == 1 and not (strict and len(core) < 3):
+                return hit[0]['name']
+            if len(hit) > 1:
+                # 同一主干挂多个标题时取最靠上的一层：点脉络是要落到那一节，
+                # 不是落到节里的某个小标题；仍并列就放弃
+                up = min(h['lv'] for h in hit)
+                top = [h for h in hit if h['lv'] == up]
+                if len(top) == 1:
+                    return top[0]['name']
+        # 末招：只取开头的汉字段（「罗尔 f(a)=f(b)…」-> 罗尔），由长到短试前缀。
+        # 前缀一变短歧义概率就上升，所以一旦出现多个候选就停手，不再缩。
+        cjk = re.match(r'[\u4e00-\u9fff]{2,}', core or n)
+        if cjk:
+            p = cjk.group(0)
+            top_k = len(p) if strict else min(len(p), 8)
+            for k in range(top_k, 1, -1):
+                q = p[:k]
+                hit = [h for h in self._hlist if _core(h['text']).startswith(q)]
+                if not hit and k >= 3 and not strict:
+                    hit = [h for h in self._hlist if q in _nztxt(h['text'])]
+                if len(hit) == 1:
+                    return hit[0]['name']
+                if len(hit) > 1:
+                    up = min(h['lv'] for h in hit)
+                    top = [h for h in hit if h['lv'] == up]
+                    return top[0]['name'] if len(top) == 1 else None
+        return None
+
+    def _resolve(self, txt, strict=False):
+        """脉络行 -> 标题书签。命中唯一才连，歧义一律不连。
+
+        先去原样匹配；不成再剥掉行首的节号重来——「§1 罗尔」的 §1 只在
+        脉络里出现，标题侧写的是「罗尔中值定理」，靠剥号才能对上。
+        """
+        line = txt.strip()
+        a = self._match(line, strict)
+        if a:
+            return a
+        s = re.sub(r'^\**\s*§?\s*\d+(?:\.\d+)*[\s.、]*', '', line).strip()
+        if s and s != line:
+            return self._match(s, strict)
+        return None
+
+    def _tree_link(self, p, txt, depth, first_line):
+        if not self._tree_links_on:
+            return
+        # 树根一行就是章标题，固定回顶部，不参与模糊匹配（否则会连到某个 h3）
+        anchor = self._hlist[0]['name'] if (first_line and depth == 0 and self._hlist) \
+            else self._resolve(txt, strict=(depth >= 2))
+        if anchor:
+            link_runs(p, anchor)
+            self.link_stat['tree'] += 1
+        elif depth <= 1:
+            self.link_stat['tree_miss'].append(txt.strip()[:40])
+        if os.environ.get('CRB_LINK_DEBUG'):
+            print('    [link] %-38s -> %s' % (txt.strip()[:38], anchor or '—'))
+
+    def _try_anchor(self, p, text):
+        """附录条目挂书签：按预扫描顺序消费，标签不一致时向后容忍 2 条。"""
+        if not self._in_appx or self._qi >= len(self._items):
+            return
+        label = _item_label(text)
+        if not label:
+            return
+        k = self._qi
+        for j in range(self._qi, min(self._qi + 3, len(self._items))):
+            if _nztxt(self._items[j]['label']) == _nztxt(label):
+                k = j
+                break
+        else:
+            self.link_stat['item_miss'] += 1
+            return
+        add_bookmark(p, self._items[k]['name'], self._next_id())
+        self._qi = k + 1
+        self.link_stat['item'] += 1
+
+    def nav_line(self):
+        """首页速达：指向本篇几块固定结构，省去翻页。缺哪块就不出现哪项。"""
+        want = ('本章脉络', '易错点与极客备忘录', '附录 · 题库', '附录：题库', '一页速查')
+        got = [h for w in want for h in self._hlist if h['text'] == w]
+        if len(got) < 2:
+            return
+        p = self.doc.add_paragraph()
+        pf = p.paragraph_format
+        pf.space_before = Pt(0); pf.space_after = Pt(2)
+        pf.line_spacing = 1.2
+        r = p.add_run("速达 ")
+        set_run(r, 8.5, True, GOLD, CN_FONT)
+        for i, h in enumerate(got):
+            if i:
+                s = p.add_run(" · ")
+                set_run(s, 8.5, False, GREY, CN_FONT)
+            add_link(p, h['text'], h['name'], size=8.5)
+            self.link_stat['nav'] += 1
+
+    def question_line(self, sec):
+        """小节标题下的「对应题目」：每个题号一条指向附录条目的链接。"""
+        items = self._qmap.get(sec) or []
+        if not items:
+            return
+        def _ord(it):
+            ns = [int(x) for x in re.findall(r'\d+', it['disp'])]
+            return ns or [999]
+        items = sorted(items, key=_ord)
+        p = self.doc.add_paragraph()
+        pf = p.paragraph_format
+        pf.space_before = Pt(0); pf.space_after = Pt(5)
+        pf.line_spacing = 1.2
+        pf.left_indent = Cm(0.1)
+        r = p.add_run("对应题目 ")
+        set_run(r, 8.5, True, GOLD, CN_FONT)
+        for i, it in enumerate(items):
+            if i:
+                s = p.add_run(" · ")
+                set_run(s, 8.5, False, GREY, CN_FONT)
+            add_link(p, it['disp'], it['name'], size=8.5)
+            self.link_stat['q'] += 1
 
     # 页眉页脚
     def header_footer(self):
@@ -480,6 +815,10 @@ class Builder:
         shade_para(p, INK)
         r = p.add_run(text)
         set_run(r, 21, True, "FFFFFF", HD_FONT)
+        h = self._next_hdr(1, text)
+        if h:
+            add_bookmark(p, h['name'], self._next_id())
+            set_outline(p, 0)
 
     def sub(self, text):
         p = self.doc.add_paragraph()
@@ -488,6 +827,9 @@ class Builder:
         add_inline(p, text, size=9, color=GREY, font=CN_FONT)
 
     def h2(self, text, page_break=False):
+        if not self._nav_done:
+            self._nav_done = True
+            self.nav_line()          # 速达行放在第一个二级标题之上，不隶属任何一节
         p = self.doc.add_paragraph()
         pf = p.paragraph_format
         if page_break:
@@ -498,6 +840,12 @@ class Builder:
         shade_para(p, "EDF2F8")
         border_para(p, 'left', 30, INK, 8)
         add_inline(p, text, size=14.5, color=INK, bold=True, font=HD_FONT)
+        self._in_appx = ('附录' in text or '题库' in text)
+        self._tree_links_on = (text.strip() == '本章脉络')
+        h = self._next_hdr(2, text)
+        if h:
+            add_bookmark(p, h['name'], self._next_id())
+            set_outline(p, 1)
 
     def h3(self, text):
         p = self.doc.add_paragraph()
@@ -507,6 +855,10 @@ class Builder:
         r = p.add_run("▸ ")
         set_run(r, 11, True, GREEN, CN_FONT)
         add_inline(p, text, size=11.5, color=INK, bold=True, font=HD_FONT)
+        h = self._next_hdr(3, text)
+        if h:
+            add_bookmark(p, h['name'], self._next_id())
+            set_outline(p, 2)
 
     def para(self, text, size=10.5):
         p = self.doc.add_paragraph()
@@ -533,6 +885,7 @@ class Builder:
         r = p.add_run(mark)
         set_run(r, 10.5, True, GREEN if not idx else INK, CN_FONT)
         add_inline(p, text)
+        self._try_anchor(p, text)
 
     def container(self, kind, title, inner):
         fill, bar = FILL[kind], BAR[kind]
@@ -552,6 +905,7 @@ class Builder:
             first.paragraph_format.space_before = Pt(1)
             first.paragraph_format.space_after = Pt(4)
             add_inline(first, title, size=10.5, color=bar, bold=True, font=HD_FONT)
+            self._try_anchor(first, title)
             target = None
         else:
             target = first
@@ -600,6 +954,7 @@ class Builder:
             if depth == 0 and bars == 0 and not branch and wrote:
                 depth = prev_depth                      # 无树符的续行
             prev_depth = depth
+            first_line = not wrote
             if wrote:
                 p = cell.add_paragraph()
             wrote = True
@@ -612,6 +967,7 @@ class Builder:
                 self._code_line(p, txt, 8.8, True, INK, CN_FONT)
             else:
                 self._code_line(p, txt, 8.6, False, "2C3E50", CN_FONT)
+            self._tree_link(p, txt, depth, first_line)
 
     def _code_line(self, p, txt, size=8.6, bold=False, color="2C3E50", font=MONO):
         """等宽/结构行：支持 $…$ 行内公式与 _{..}/^{..}，避免 Eij 这种"无下标"写法"""
@@ -681,6 +1037,7 @@ class Builder:
             p.paragraph_format.space_after = Pt(3)
             p.paragraph_format.line_spacing = 1.4
             add_inline(p, txt, size=10)
+            self._try_anchor(p, txt)
         i = 0
         while i < len(lines):
             s = lines[i].strip()
@@ -699,6 +1056,7 @@ class Builder:
                 pf.space_after = Pt(2); pf.line_spacing = 1.36
                 r = p.add_run("▪ "); set_run(r, 9.5, True, GREEN, CN_FONT)
                 add_inline(p, s[2:], size=10)
+                self._try_anchor(p, s)
             elif re.match(r'^\d+\.\s', s):
                 flush()
                 m = re.match(r'^(\d+)\.\s+(.*)$', s)
@@ -708,6 +1066,7 @@ class Builder:
                 pf.space_after = Pt(2); pf.line_spacing = 1.36
                 r = p.add_run(m.group(1) + ". "); set_run(r, 9.5, True, INK, CN_FONT)
                 add_inline(p, m.group(2), size=10)
+                self._try_anchor(p, s)
             elif s == '':
                 flush()
             else:
@@ -796,6 +1155,7 @@ def split_containers(lines):
 
 def render(b: Builder, lines):
     blocks = split_containers(lines)
+    b.index_anchors(blocks)
     i = 0
     buf = []
     def flush():
@@ -825,6 +1185,9 @@ def render(b: Builder, lines):
             flush()
             title = s[3:].strip()
             b.h2(title, page_break=(title in ('一页速查', '附录 · 题库')))
+            mm = NUM_RE.match(title)
+            if mm:
+                b.question_line(mm.group(1))
         elif s.startswith('### '):
             flush(); b.h3(s[4:].strip())
         elif s.startswith('$$'):
@@ -1031,6 +1394,15 @@ def main():
         b = Builder()
         b.header_footer()
         render(b, lines)
+        st = b.link_stat
+        print('  跳转: 标题书签 %d | 速达 %d | 脉络链接 %d | 题目链接 %d | 附录条目 %d/%d'
+              % (len(b._hlist), st['nav'], st['tree'], st['q'], st['item'], len(b._items)))
+        if st['tree_miss']:
+            print('  · 脉络中未连接的小节行 %d 条（无同名标题，按纯文本保留）' % len(st['tree_miss']))
+            for t in st['tree_miss'][:5]:
+                print('      -', t)
+        if st['item_miss']:
+            print('  ! 附录条目未挂书签 %d 条（标签与预扫描不一致）' % st['item_miss'])
         polish_math(b.doc)
         trim_trailing_empty(b.doc)
         import os

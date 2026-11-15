@@ -21,6 +21,7 @@
 | 树块里的 `│ ├ └ ─` 与中文/公式混排错位 | `_render_tree()`：剥掉行首树符，按「竖线数 + 分支符」算层级写 `w:ind`，一级节点加粗主色 |
 | 文末空页（文档以表格结尾，Word 隐式补段推到下页） | `trim_trailing_empty()`：删多余空段，显式补一个 1pt 段落 |
 | 空 run 缺字体（`m:sSub` 的空底数） | `polish_math()` 对空 run 也补字体，否则"缺字体 run = 0"指标被打破 |
+| 生成的册子只能靠翻页找内容 | `index_anchors()` 预扫描标题与附录条目，标题写 `w:bookmarkStart` + `w:outlineLvl`（导航窗格、折叠三角）；首页「速达」、脉络行、小节下的「对应题目」由 `add_link` / `link_runs` 连到书签 |
 
 ## 二、排版留白的三条经验
 
@@ -34,6 +35,10 @@
 - 页眉不要用 tab 右对齐（会被 `Header` 样式的默认制表位干扰）。用 **1×2 无边框表格**，右格右对齐，表格 bottom border 当页眉线
 - 容器块用单格表格 + `tcBorders` 左边框 + `w:shd` 底纹 + `w:cantSplit`（防框体被分页腰斩）
 - 代码块必须给每个 run 补 `xml:space="preserve"`，否则连续空格被折叠，ASCII 树错位
+- **超链接不能整段搬运 run**：`w:hyperlink` 只装 run，`m:oMath` 不在 run 层级。把整段 run 移到段尾的 hyperlink 里，`文字—公式—文字` 的顺序会被打乱。`link_runs()` 按「连续 run 组」分别包，同一段可以有多个 hyperlink，顺序保持不变
+- **书签名以 `_` 开头等于 Word 隐藏书签**：`Document.Bookmarks.Count` 默认不数它们（COM 校验要先 `$d.Bookmarks.ShowHidden = $true`），功能不受影响；`w:hyperlink` 的 `w:anchor` 指向它照样能跳
+- **链接可以先于书签出现**：`w:anchor` 由 Word 打开时解析，所以索引只需预扫描一遍标题/条目名，不必先渲染后置的附录。`index_anchors()` 就是为此存在——脉络块在前、附录书签在后，中间没有第二遍构建
+- 大纲级别写在 `w:outlineLvl`（0/1/2），不是换用 Heading 样式：导航窗格与折叠都认它，而视觉样式仍由 `h1/h2/h3` 自定义控制
 
 ## 四、LaTeX 转换的两个硬坑
 
