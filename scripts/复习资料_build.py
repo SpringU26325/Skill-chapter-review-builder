@@ -607,12 +607,16 @@ class Builder:
 
     @staticmethod
     def _nums(line):
-        """脉络行里出现的节号：行首 `§6.5`、括号里的 `（2.3）`。"""
+        """脉络行里出现的节号：行首 `§6.5`、括号里的 `（2.3）`。
+
+        括号只认带点的节号。`（物理页 112–117）` 里的 112 是页码，不是节号；
+        若拿它去匹配，标题一旦以 112 开头就会连错。
+        """
         out = []
         m = re.match(r'^[*\s]*§?\s*(\d+(?:\.\d+)*)', line)
         if m:
             out.append(m.group(1))
-        m = re.search(r'[（(]\s*(\d+(?:\.\d+)*)', line)
+        m = re.search(r'[（(]\s*(\d+\.\d+(?:\.\d+)*)', line)
         if m and m.group(1) not in out:
             out.append(m.group(1))
         return out
@@ -681,11 +685,29 @@ class Builder:
             return self._match(s, strict)
         return None
 
+    def _root_anchor(self, txt):
+        """脉络首行：只认精确匹配与节号，都不成才回退章标题。
+
+        首行通常是概念式根名（「复合函数 z=f(u,v)…」），做模糊匹配会连到某个
+        小节；但也存在整棵树没有根行、首行直接写节名的情况（「五种表示法（2.5）」），
+        那种必须连到那一节，不能一律当章标题。
+        """
+        n = _nztxt(txt)
+        if n:
+            exact = [h for h in self._hlist if _nztxt(h['text']) == n]
+            if len(exact) == 1:
+                return exact[0]['name']
+        for num in self._nums(txt):
+            hit = [h for h in self._hlist
+                   if re.match(r'^\s*' + re.escape(num) + r'(?![\d.])', h['text'])]
+            if len(hit) == 1:
+                return hit[0]['name']
+        return self._hlist[0]['name'] if self._hlist else None
+
     def _tree_link(self, p, txt, depth, first_line):
         if not self._tree_links_on:
             return
-        # 树根一行就是章标题，固定回顶部，不参与模糊匹配（否则会连到某个 h3）
-        anchor = self._hlist[0]['name'] if (first_line and depth == 0 and self._hlist) \
+        anchor = self._root_anchor(txt) if (first_line and depth == 0) \
             else self._resolve(txt, strict=(depth >= 2))
         if anchor:
             link_runs(p, anchor)
@@ -747,6 +769,9 @@ class Builder:
         pf.space_before = Pt(0); pf.space_after = Pt(5)
         pf.line_spacing = 1.2
         pf.left_indent = Cm(0.1)
+        # 标题的 keep_with_next 只牵到这一行；这一行若不跟正文同页，
+        # 标题就会孤悬页底，正文翻到下一页
+        pf.keep_with_next = True
         r = p.add_run("对应题目 ")
         set_run(r, 8.5, True, GOLD, CN_FONT)
         for i, it in enumerate(items):
@@ -808,6 +833,7 @@ class Builder:
 
     def h1(self, text):
         p = self.doc.add_paragraph()
+        p.style = self.doc.styles['Heading 1']
         p.paragraph_format.space_before = Pt(2)
         p.paragraph_format.space_after = Pt(12)
         p.paragraph_format.line_spacing = 1.55
@@ -831,6 +857,7 @@ class Builder:
             self._nav_done = True
             self.nav_line()          # 速达行放在第一个二级标题之上，不隶属任何一节
         p = self.doc.add_paragraph()
+        p.style = self.doc.styles['Heading 2']
         pf = p.paragraph_format
         if page_break:
             pf.page_break_before = True
@@ -849,6 +876,7 @@ class Builder:
 
     def h3(self, text):
         p = self.doc.add_paragraph()
+        p.style = self.doc.styles['Heading 3']
         pf = p.paragraph_format
         pf.space_before = Pt(9); pf.space_after = Pt(3); pf.line_spacing = 1.3
         pf.keep_with_next = True

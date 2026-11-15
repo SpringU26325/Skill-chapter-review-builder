@@ -111,36 +111,75 @@ PS_TEMPLATE = (
 )
 
 
-def check(paths):
+CHUNK = 8          # 每次 PowerShell 调用最多查几份；46 份一次跑会顶到 180s 看门狗
+
+
+def _kill_stray_word():
+    """只清无主窗口的 Word（自动化起的那种），用户自己开着的窗口留着。"""
+    ps = ("Get-Process WINWORD -ErrorAction SilentlyContinue | "
+          "Where-Object { $_.MainWindowHandle -eq 0 } | Stop-Process -Force "
+          "-ErrorAction SilentlyContinue")
+    try:
+        subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
+                       capture_output=True, timeout=60)
+    except Exception:
+        pass
+
+
+def _run_chunk(paths):
+    """返回 (rows, err)。rows = [(path, pages, [每页字符数…])]。"""
     with open(LIST, 'w', encoding='utf-8') as f:
         f.write('\n'.join(os.path.abspath(p) for p in paths))
     ps = PS_TEMPLATE.replace('__LIST__', LIST)  # PS 单引号串内反斜杠是字面量，无需转义
-    r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
-                       capture_output=True, text=True, encoding='utf-8',
-                       errors='replace', timeout=180)
+    try:
+        r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
+                           capture_output=True, text=True, encoding='utf-8',
+                           errors='replace', timeout=180)
+    except subprocess.TimeoutExpired:
+        _kill_stray_word()
+        return [], '180s 内没跑完（这批 %d 份）；已清理残留的无窗口 Word' % len(paths)
     if 'ok' not in (r.stdout or ''):
-        print('FAIL', (r.stderr or '')[:300])
-        return 1
-    suspicious = 0
-    doc_idx = 0
-    total_flag = 0
+        return [], ('PowerShell 未回 ok：' + (r.stderr or r.stdout or '')[:200])
+    rows, cur = [], None
     for line in (r.stdout or '').splitlines():
         parts = line.split('|')
         if parts[0] == 'DOC':
-            doc_idx += 1
-            suspicious = 0
-            pages = int(parts[1])
-            print(f'--- {os.path.basename(paths[doc_idx - 1])}：{pages} 页')
-        elif parts[0] == 'PAGE':
-            idx, ln = int(parts[1]), int(parts[2])
-            flag = '  << 疑似空页(len<40)' if ln < 40 else ''
-            if flag:
-                suspicious += 1
-                total_flag += 1
-            print(f'  p{idx:>2}: {ln}{flag}')
+            cur = (None, int(parts[1]), [])
+            rows.append(cur)
+        elif parts[0] == 'PAGE' and cur is not None:
+            cur[2].append(int(parts[2]))
         elif parts[0] == 'ok':
             break
-    print(f'\n共 {doc_idx} 份，疑似空页 {total_flag} 页')
+    # 按顺序补上路径：PowerShell 是顺序打开的
+    return [(paths[i], rows[i][1], rows[i][2]) for i in range(min(len(paths), len(rows)))], None
+
+
+def check(paths):
+    total_flag = 0
+    done = 0
+    fails = []
+    for i in range(0, len(paths), CHUNK):
+        batch = paths[i:i + CHUNK]
+        rows, err = _run_chunk(batch)
+        if err:
+            for p in batch:
+                fails.append((p, err))
+            print('FAIL %s：%s' % (os.path.basename(batch[0]), err))
+            continue
+        for p, pages, lens in rows:
+            done += 1
+            print(f'--- {os.path.basename(p)}：{pages} 页')
+            for k, ln in enumerate(lens, 1):
+                flag = '  << 疑似空页(len<40)' if ln < 40 else ''
+                if flag:
+                    total_flag += 1
+                print(f'  p{k:>2}: {ln}{flag}')
+    print(f'\n共 {done} 份，疑似空页 {total_flag} 页')
+    if fails:
+        print(f'未完成 {len(fails)} 份：')
+        for p, why in fails[:8]:
+            print('  - %s：%s' % (os.path.basename(p), why))
+        return 1
     return 2 if total_flag else 0
 
 
