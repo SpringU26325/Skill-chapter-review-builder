@@ -21,10 +21,40 @@ from contextlib import contextmanager
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _env
 
-ROOT = _env.find_root()
-LOCK_DIR = _env.lock_dir(ROOT)
-LIST = os.path.join(LOCK_DIR, '.页检清单.txt')
-LOCK = os.path.join(LOCK_DIR, '.pdf.lock')
+ROOT = None
+LOCK_DIR = None
+LIST = None                                     # 每进程一份清单，见 _bind_paths()
+LOCK = None
+
+
+def _root_from_docx(paths):
+    """工作区外被调用时（find_root 为 None），从 docx 路径反推工作区根。
+
+    锁目录必须落在工作区同一个 `复习资料\\_locks` 下：`lock_dir(None)` 会退到
+    `TEMP\\crb_locks`，那是另一把 `.pdf.lock`，等于没上锁——工作区内的重建正在
+    转 PDF 时，这里的页检会同时开第二个 Word 实例。
+    """
+    d = os.path.dirname(os.path.abspath(paths[0]))
+    for _ in range(6):
+        if os.path.isdir(os.path.join(d, _env.WORKSPACE_MARK)):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+
+def _bind_paths(paths):
+    """确定工作区 → 锁目录 → 本进程清单名。清单带 pid：并行页检不会互相删清单。"""
+    global ROOT, LOCK_DIR, LIST, LOCK
+    ROOT = _env.find_root() or _root_from_docx(paths)
+    LOCK_DIR = _env.lock_dir(ROOT)
+    if not ROOT:
+        print('WARN 定位不到工作区，锁目录退到 %s；与工作区内的会话不是同一把锁，'
+              '可能同时开第二个 Word。建议在复习资料工作区里执行。' % LOCK_DIR)
+    LIST = os.path.join(LOCK_DIR, '.页检清单.%d.txt' % os.getpid())
+    LOCK = os.path.join(LOCK_DIR, '.pdf.lock')
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
@@ -119,9 +149,17 @@ def main():
     if not args:
         print(__doc__)
         raise SystemExit(1)
+    _bind_paths(args)
     with _file_lock(LOCK):
-        code = check(args)
-    os.remove(LIST)
+        try:
+            code = check(args)
+        finally:
+            # 必须在锁内删：锁外删会踩到下一个会话刚写进去的清单，
+            # 对方的 PowerShell 读不到文件就整批 FAIL。
+            try:
+                os.remove(LIST)
+            except OSError:
+                pass
     raise SystemExit(code)
 
 

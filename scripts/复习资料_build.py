@@ -21,9 +21,55 @@ MD     = sys.argv[1] if len(sys.argv) > 1 else ""
 OUT    = sys.argv[2] if len(sys.argv) > 2 else ""
 HEADER = sys.argv[3] if len(sys.argv) > 3 else ""
 NOTATION_MD = sys.argv[4] if len(sys.argv) > 4 else ""
-from _env import find_xsl
+from _env import find_xsl, find_root, lock_dir
 
 XSL = find_xsl()          # 环境变量 → 包内 assets → Office 安装目录，三级探测
+
+
+# ---------- 并发锁（直接调用本脚本时） ----------
+def _subject_of(md):
+    stem = os.path.splitext(os.path.basename(md))[0]
+    return stem.split('_')[0] if '_' in stem else stem
+
+
+def _hold_build_lock():
+    """按科目拿 `.build_<科目>.lock`，与 复习资料_重建.py 同一把锁。
+
+    直接跑 `复习资料_build.py a.md out.docx` 时无人加锁，两个会话同时保存同一个
+    docx 就是后写覆盖前写，静默丢成果。msvcrt 是跨进程锁，子进程重复加同一把会
+    自锁，所以 重建.py 通过 CRB_LOCK_HELD 告诉这里「锁在祖先手上」，跳过。
+    """
+    subj = _subject_of(MD)
+    if not subj or os.environ.get('CRB_LOCK_HELD') == subj:
+        return None
+    root = find_root(os.path.dirname(os.path.abspath(OUT)) or None)
+    if not root:
+        print('WARN 定位不到工作区，本次不加构建锁；并行会话下可能互相覆盖。')
+        return None
+    import msvcrt, time
+    path = os.path.join(lock_dir(root), '.build_%s.lock' % subj)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR)
+    t0 = time.time()
+    while True:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return fd
+        except OSError:
+            if time.time() - t0 > 900:
+                os.close(fd)
+                raise SystemExit('等待 %s 构建锁超时：另一个会话正在构建，稍后重试' % subj)
+            time.sleep(0.5)
+
+
+def _release_build_lock(fd):
+    if fd is None:
+        return
+    import msvcrt
+    try:
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    os.close(fd)
 
 # ---------- 配色 ----------
 INK     = "1B3A5C"   # 主色 深靛蓝
@@ -976,32 +1022,38 @@ def main():
     if not MD or not OUT:
         print('用法：python 复习资料_build.py <md> <out.docx> "<页眉文字>" [符号表.md]')
         sys.exit(2)
-    src = open(MD, encoding='utf-8').read()
-    lines = inject_notation(src.split('\n'))
-    if not HEADER:
-        HEADER = pick_header(lines, MD)
-    b = Builder()
-    b.header_footer()
-    render(b, lines)
-    polish_math(b.doc)
-    trim_trailing_empty(b.doc)
-    import os
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    lock_fd = _hold_build_lock()
     try:
-        b.doc.save(OUT)
-        print("saved:", OUT)
-    except PermissionError:
-        # 正式路径被预览面板/Word 占用：降级写到 md 同目录，交付时再覆盖。
-        # 正常情况下不产生任何 tmp 副本，tmp 只留源稿与脚本。
-        alt = os.path.join(os.path.dirname(MD), os.path.basename(OUT))
-        b.doc.save(alt)
-        print("LOCKED:", OUT)
-        print("saved:", alt, "（正式文件被占用，关闭预览后覆盖）")
-        # 响亮失败（2026-11-10 定）：退出码非 0，调用方无法误判为交付成功。
-        # 正式文件未更新时流程必须停下，查明持有者：
-        #    python "<本脚本同目录>\_wholock.py" <docx>
-        print("WARNING: 正式文件未更新！退出码 3。先解除占用再重跑，禁止当作已交付。")
-        raise SystemExit(3)
+        src = open(MD, encoding='utf-8').read()
+        lines = inject_notation(src.split('\n'))
+        if not HEADER:
+            HEADER = pick_header(lines, MD)
+        b = Builder()
+        b.header_footer()
+        render(b, lines)
+        polish_math(b.doc)
+        trim_trailing_empty(b.doc)
+        import os
+        os.makedirs(os.path.dirname(OUT), exist_ok=True)
+        try:
+            b.doc.save(OUT)
+            print("saved:", OUT)
+        except PermissionError:
+            # 正式路径被预览面板/Word 占用：降级写到 md 同目录，交付时再覆盖。
+            # 正常情况下不产生任何 tmp 副本，tmp 只留源稿与脚本。
+            # 降级名带 pid：并行会话同时撞占用时，两个副本不会互相覆盖。
+            stem = os.path.splitext(os.path.basename(OUT))[0]
+            alt = os.path.join(os.path.dirname(MD), '%s.locked-%d.docx' % (stem, os.getpid()))
+            b.doc.save(alt)
+            print("LOCKED:", OUT)
+            print("saved:", alt, "（正式文件被占用，关闭预览后覆盖）")
+            # 响亮失败（2026-11-10 定）：退出码非 0，调用方无法误判为交付成功。
+            # 正式文件未更新时流程必须停下，查明持有者：
+            #    python "<本脚本同目录>\_wholock.py" <docx>
+            print("WARNING: 正式文件未更新！退出码 3。先解除占用再重跑，禁止当作已交付。")
+            raise SystemExit(3)
+    finally:
+        _release_build_lock(lock_fd)
 
 if __name__ == '__main__':
     main()

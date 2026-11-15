@@ -20,10 +20,11 @@ Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。优先用�
 | `Ebooks\` | 教材 PDF 主线，**只读** |
 | `复习资料\_源稿\` | 各章 md、`<科目>_notation.md` |
 | `复习资料\<科目>\` | 成品 docx，分科存放，不许散在根目录 |
-| `复习资料\_render\` | 渲染过程文件，交付即清 |
+| `复习资料\_render\<科目>_<章节>\` | 渲染过程文件，一科目一章节一个目录，交付即清自己那份 |
 | `复习资料\_locks\` | 并发锁，删了保护失效 |
 | `复习资料\_台账.md` | **唯一进度真相**：页码、分册、成品页数、下一章、待办 |
 | `复习资料\_踩坑清单.md` | 踩坑事实，改引擎、写公式、调 COM 前必读 |
+| `复习资料\_待修缺陷.md` | 已知未修的缺陷（别顺手改，遇到再修） |
 
 **本 skill 只管「复习资料」这一类交付物。** 一般性的 Word 排版、美化、改写任意 docx，走通用文档 skill，不要走这里——版式体系完全不同（这里是七容器私有方言 + 自建引擎）。
 
@@ -62,6 +63,9 @@ python "<skill>\scripts\复习资料_重建.py" --all
 # 单科目 + 附页数统计
 python "<skill>\scripts\复习资料_重建.py" 高等数学 --all --pdf
 
+# 只重建自己这一册（并行会话必用：科目关键字是子串匹配，会连坐别人的章）
+python "<skill>\scripts\复习资料_重建.py" --only 程序设计_第1章 --pdf
+
 # 交付前审计：四项硬指标 + 公式预检
 python "<skill>\scripts\复习资料_audit.py" <md> <docx>
 
@@ -71,10 +75,10 @@ python "<skill>\scripts\复习资料_lint_md.py" <md> [md2 ...]
 # 页数 + 空页筛查（只读 COM，绝不导出）
 python "<skill>\scripts\复习资料_页检.py" <docx> [docx2 ...]
 
-# 视觉验收：准备 → 渲染 → 清理
+# 视觉验收：准备 → 渲染 → 清理（每章一个私有子目录，并行会话互不覆盖）
 python "<skill>\scripts\复习资料_渲染.py" --prepare <docx>
-python "<skill>\scripts\复习资料_渲染.py" --render --dpi 140
-python "<skill>\scripts\复习资料_渲染.py" --clean
+python "<skill>\scripts\复习资料_渲染.py" --render          # 只有一个目录时可省参数
+python "<skill>\scripts\复习资料_渲染.py" --clean           # 目录不止一个时必须写：--clean <目录名>
 ```
 
 **线性代数额外一步**（通用审计不含记号规则，必须单独跑）：
@@ -86,6 +90,14 @@ python "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线�
 退出码 0 = 全过；1 = 有 ERROR，不许交付。WARN 不阻断，但要在自检报告里逐条说明。
 
 `渲染 --prepare` 之后，**Word COM 那一段必须由 PowerShell 工具执行包内的 `render.ps1`**，且**必须后台执行**（`run_in_background`）再轮询 `.renderlog.txt`——前台调用拉起 GUI 后工具可能提前返回，留下孤儿 Word，两个实例抢同一份 docx 就会弹「文件正在使用」模态框，之后所有 COM 调用（含 `Quit`）都返回 `RPC_E_CALL_REJECTED`，看起来像「导出挂死」。正常一份 8 页资料 8–10 秒出 PDF。
+
+**过程目录按「科目 + 章节」隔离**（11-14 实测）：`--prepare` 不写共享的 `_render\p1.docx`，而是建 `_render\<科目>_<章节>\`（如 `_render\程序设计_第1章\`）放自己的副本、清单、`render.ps1` 与 PNG。**科目必须在目录名里**——只写「第1章」的话，将来两个科目同时做第 1 章就会撞（科目取文件名 `<科目>_第X章` 前缀，取不到时退回所在目录名，一次 `--prepare` 只允许同一科目）。并行会话各占一个目录，就不会出现「同一轮渲染里第 7 页忽然变成另一章」。目录不止一个时 `--render` / `--clean` **拒绝猜**，列出候选让你指定；也不要对 `_render` 整体做清理，那会删掉别人正在用的过程文件。`CRB_RENDER_DIR` 仍可整体改到别处（私有目录），优先级最高。
+
+`--prepare` **不再删整个目录**：同名目录里的 `pN.docx` 若正被 Word 占着（另一个会话在渲染同一章），直接报错让你等或换私有目录，而不是把人家的清单删掉、副本留下半截。重跑只清自己那一轮的遗留：多余编号的 `pN`、旧 `.renderlog.txt`（里面可能留着上一轮的 `TIMEOUT|`）、旧 `_render_cache`。
+
+并发相关的临时文件全部带 pid：锁目录的 `.pdf_list.<pid>.txt` / `.页检清单.<pid>.txt`、渲染目录的写权限探针 `.w.<pid>`。固定名在并行下会互相删——探针被踩的后果是**静默退回 `TEMP\crb_render`**，随后 `--render` 找不到清单，看着像 `--prepare` 没生效。页检的锁目录按「当前目录 → docx 所在工作区」的顺序定位，不再随 cwd 漂到 `TEMP\crb_locks`（那等于另一把锁，两个 Word 实例会同时起来）。
+
+直接跑 `复习资料_build.py <md> <out.docx>` 也会按科目抢 `.build_<科目>.lock`；由 `复习资料_重建.py` 调用时它已持有同一把锁，靠 `CRB_LOCK_HELD` 传下去避免自锁。绕过重建脚本单册构建时，这就是唯一挡在「两个会话同存一份 docx、后写覆盖前写」前面的东西。
 
 `render.ps1` 自带熔断：日志 180 秒没有新增就记 `TIMEOUT|`、强杀 Word 让阻塞的 COM 立刻抛错，然后收尾退出（阈值可用 `CRB_RENDER_TIMEOUT` 临时调整）。**判读只看日志**——超时同样打印 `FAIL|…远程过程调用失败`，退出码与「只挂了一个文件」没有区别，`TIMEOUT|` 才是挂死的证据。脚本退出前会把本次新起却没退干净的 WINWORD 强杀（日志 `CLEANED leftover`），只杀自己拉起的实例，不动用户开着的窗口。
 

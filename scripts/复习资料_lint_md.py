@@ -145,24 +145,40 @@ RULES = [
 
 
 def _check_container_balance(text):
-    """::: 开头（带类型）与单独 ::: 结尾必须配对。返回错误列表。"""
+    """::: 开头（带类型）与单独 ::: 结尾必须配对；顺带查 :::code 嵌进别的容器。
+
+    嵌套会静默错位：容器内第一个 `:::` 被当结束符,内外层级立刻乱，而引擎不报错。
+    """
     errs = []
     opens = closes = 0
+    stack = []
     for i, line in enumerate(text.splitlines(), 1):
         s = line.strip()
-        if re.match(r'^:::[a-zA-Z]', s):
+        m = re.match(r'^:::([a-zA-Z]\w*)\s*(.*)$', s)
+        if m:
             opens += 1
-        elif re.match(r'^:::$', s) or s == ':::':
+            kind = m.group(1)
+            if kind == 'code' and stack:
+                errs.append(f'  ERROR L{i}: :::code 不能嵌在 :::{stack[-1]} 里——'
+                            f'容器内第一个 ::: 会被当结束符，内外错位；移到容器外')
+            stack.append(kind)
+        elif s == ':::':
             closes += 1
+            if stack:
+                stack.pop()
     if opens != closes:
         errs.append(f'  ERROR L?: ::: 容器不配对（开头 {opens} / 结尾 {closes}）')
     return errs
 
 
-def _tree_code_lines(lines):
-    """按整块判定结构块，与引擎 _render_code 一致：块内任一行带树符即整块算树。
-    返回需要跑树规则的行号集合（1-based）；根行不带树符，也要覆盖到。"""
-    hit = set()
+def _code_blocks(lines):
+    """按整块判定 :::code，与引擎 _render_code 一致：块内任一行带树符即整块算树。
+
+    返回两个 1-based 行号集合：
+      code_lines —— 块内全部行。代码是原文，反引号/反斜杠/树符都不该按正文规则查。
+      tree_lines —— 块内任一行带树符时整块都要跑树规则（根行本身不带树符，也要覆盖）。
+    """
+    code_lines, tree_lines = set(), set()
     block, in_code = [], False
     for i, line in enumerate(lines, 1):
         s = line.strip()
@@ -170,24 +186,35 @@ def _tree_code_lines(lines):
             in_code, block = True, []
             continue
         if in_code and s == ':::':
+            rng = range(i - len(block), i)
+            code_lines.update(rng)
             if any(TREE_LINE_RE.match(ln) for ln in block):
-                hit.update(range(i - len(block), i))
+                tree_lines.update(rng)
             in_code = False
             continue
         if in_code:
             block.append(line)
-    return hit
+    return code_lines, tree_lines
 
 
 def check_file(path):
     with open(path, encoding='utf-8') as f:
         text = f.read()
     lines = text.splitlines()
-    tree_lines = _tree_code_lines(lines)
+    code_lines, tree_lines = _code_blocks(lines)
     n_err = n_warn = 0
     out = [f'=== {path}']
     for i, line in enumerate(lines, 1):
         s = line.strip()
+        if i not in code_lines and s.startswith('```'):
+            # 引擎只认 :::code。围栏行会被当普通段落，代码各行被 flush() 用空格拼成
+            # 一整段流水文本，缩进/注释/换行全丢，而 lint 与 audit 都是绿的（11-14 实测）。
+            n_err += 1
+            out.append(f'  ERROR L{i}: ``` 围栏不被引擎识别（只认 :::code），'
+                       f'围栏会变正文、代码被拼成一段流水文本')
+            out.append(f'        | {s[:100]}')
+            out.append('        改：:::code … :::（块内保留原缩进）')
+            continue
         for level, msg, pat in RULES:
             if callable(pat):
                 hit = pat(line)

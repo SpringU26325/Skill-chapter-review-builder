@@ -133,17 +133,28 @@ def render_candidates(root):
 
 
 def render_dir(root, create=True):
-    """取第一个可写候选；都不行则报错要求设 CRB_RENDER_DIR。"""
+    """取第一个可写候选；都不行则报错要求设 CRB_RENDER_DIR。
+
+    探测文件必须带 pid：固定名 `.w` 在并行会话下会互相踩——A 建、B 建、A 删、
+    B 删时 FileNotFoundError，被 except 吞掉后 B **静默退到下一个候选**，于是
+    `--prepare` 落在 `复习资料\\_render`、`--render` 却去 `TEMP\\crb_render` 找清单，
+    报「先 --prepare」。写权限探测本身不能让调用方换目录。
+    """
     for d in render_candidates(root):
         if not _is_ascii(d) and not ALLOW_CJK_RENDER_DIR and not os.environ.get('CRB_RENDER_DIR'):
             continue
         try:
             if create:
                 os.makedirs(d, exist_ok=True)
-            probe = os.path.join(d, '.w')
-            with open(probe, 'w') as f:
-                f.write('ok')
-            os.remove(probe)
+            probe = os.path.join(d, '.w.%d' % os.getpid())
+            try:
+                with open(probe, 'w') as f:
+                    f.write('ok')
+            finally:
+                try:
+                    os.remove(probe)
+                except OSError:
+                    pass
             return d
         except OSError:
             continue
