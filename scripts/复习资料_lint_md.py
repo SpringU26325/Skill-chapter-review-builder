@@ -218,6 +218,46 @@ def _code_blocks(lines):
     return code_lines, tree_lines
 
 
+TREE_PRE_RE = re.compile(r'^([│ ]*)([├└]─[ \t]*)')
+
+
+def _check_tree_depth(lines):
+    """树子项只写空格、不写 │ 时，层级会静默塌回一级。
+
+    引擎 depth = 前导 │ 个数 + 分支符。`└─ 父行` 是 1 级，其子项写成
+    `    ├─` 得 0 个 │、仍是 1 级，渲染出来与父行同缩进同字重。11-15 全量
+    32 份中招（线代 15、高数 13、物理拓展 3、程序设计第 4 章）。
+    """
+    errs, in_code, block_start, prev = [], False, 0, None
+    for i, line in enumerate(lines, 1):
+        s = line.strip()
+        if s.startswith(':::code'):
+            in_code, block_start, prev = True, i, None
+            continue
+        if in_code and s == ':::':
+            in_code, prev = False, None
+            continue
+        if not in_code:
+            continue
+        t = line.replace('\t', '    ')
+        m = TREE_PRE_RE.match(t)
+        if not m:
+            if not t.strip():
+                prev = None
+            continue
+        bars, bcol = m.group(1).count('│'), len(m.group(1))
+        if not t[m.end():].strip():
+            continue
+        depth = bars + 1
+        if prev and bars == 0 and bcol > prev[1] and depth <= prev[0]:
+            errs.append(f'  ERROR L{i}: 树子项只用了空格缩进——引擎按前导 │ 计层级，'
+                        f'这一行仍是 {depth} 级，与父行同级')
+            errs.append(f'        | {s[:100]}')
+            errs.append('        改：行首补 │（父行是 `└─` 也要补），见 md-dialect 结构块第 4 条')
+        prev = (depth, bcol)
+    return errs
+
+
 def check_file(path):
     with open(path, encoding='utf-8') as f:
         text = f.read()
@@ -258,6 +298,10 @@ def check_file(path):
                 out.append(f'        | {s[:100]}')
     for e in _check_container_balance(text):
         n_err += 1
+        out.append(e)
+    for e in _check_tree_depth(lines):
+        if e.lstrip().startswith('ERROR'):
+            n_err += 1
         out.append(e)
     out.append(f'  小结：ERROR {n_err} / WARN {n_warn}')
     return out, n_err, n_warn
