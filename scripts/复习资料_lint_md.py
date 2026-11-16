@@ -373,6 +373,53 @@ def _check_appendix(lines):
     return []
 
 
+# 与 build.py 的 TASK_PREFIX 保持一致：正文只有这些前缀才是题，
+# 【国内考法 · …】/【代码验证 · …】等结构性标签不算。
+_TASK_PREFIX = ('自拟', '课后习题', '教材例题', '课堂例题', '真题', '思考题', '总复习题')
+_TASK_RE = re.compile(r'【([^】]{2,60})】')
+_SEC_RE = re.compile(r'^##\s+[\*\s]*§?\s*(\d+(?:\.\d+)+)')
+
+
+def _check_section_tasks(lines):
+    """强制自拟的可执行校验：带节号的小节至少一道题。
+
+    引擎改成「正文题按所在节进 _qmap」后，没题的节连「对应题目」行都不出，
+    回跳也因此消失。此前这种节靠静默跳过混过去（高数 5 的 5.1–5.5 全无题卡但有
+    正文题，属假警报；大学物理 1.2 等是真没题）。这里按题型白名单逐节核，
+    正文题或附录里带 §X.Y 的题都算这一节有题。
+    """
+    out, cur, has = [], None, False
+    for i, line in enumerate(lines, 1):
+        s = line.strip()
+        m = _SEC_RE.match(s)
+        if m:
+            if cur and not has:
+                out.append(f'  ERROR L?: 第 {cur} 节没有任何题目（正文无【自拟】/【课后习题…】，'
+                           f'附录也无 §{cur} 的题）——该节不出「对应题目」行，回跳也消失')
+                out.append('        改：正文用 `:::quiz 【自拟】标题` 或 `- **【自拟】** 题干…`，'
+                           '附录用 `【课后习题 %s 第 N 题】`' % cur)
+            cur, has = m.group(1), False
+            continue
+        for mm in _TASK_RE.finditer(s):
+            label = mm.group(1)
+            if not any(label.startswith(x) for x in _TASK_PREFIX):
+                continue
+            # 附录里显式标了 §X.Y 的题归那一节；其余归当前节
+            sec = re.search(r'§\s*(\d+(?:\.\d+)+)', label)
+            if sec:
+                if sec.group(1) == cur:
+                    has = True
+                continue
+            if cur:
+                has = True
+    if cur and not has:
+        out.append(f'  ERROR L?: 第 {cur} 节没有任何题目（正文无【自拟】/【课后习题…】，'
+                   f'附录也无 §{cur} 的题）——该节不出「对应题目」行，回跳也消失')
+        out.append('        改：正文用 `:::quiz 【自拟】标题` 或 `- **【自拟】** 题干…`，'
+                   '附录用 `【课后习题 %s 第 N 题】`' % cur)
+    return out
+
+
 def check_file(path):
     with open(path, encoding='utf-8') as f:
         text = f.read()
@@ -424,7 +471,7 @@ def check_file(path):
         elif e.lstrip().startswith('WARN'):
             n_warn += 1
         out.append(e)
-    for e in _check_engine_math(lines, code_lines) + _check_appendix(lines):
+    for e in _check_engine_math(lines, code_lines) + _check_appendix(lines) + _check_section_tasks(lines):
         if e.lstrip().startswith('ERROR'):
             n_err += 1
         out.append(e)

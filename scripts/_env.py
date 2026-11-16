@@ -95,7 +95,9 @@ def require_root(start=None):
     if not root:
         raise SystemExit(
             '定位不到复习资料工作区：当前目录及其上级都没有「复习资料」目录。\n'
-            '请在复习资料工作区里执行，或用 --root <工作区根> 指定。')
+            '若这是空工作区，先建骨架： "<py>" "<skill>\\scripts\\复习资料_init.py" [科目]\n'
+            '（init 只建目录与台账，不建 .venv、不装库；可用 --dry 预演。）\n'
+            '若资料在别处，用 --root <工作区根> 或环境变量 CRB_ROOT 指定。')
     return root
 
 

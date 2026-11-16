@@ -345,6 +345,14 @@ def link_runs(p, anchor):
 NUM_RE = re.compile(r'^[*\s]*§?\s*(\d+(?:\.\d+)*)')
 ITEM_RE = re.compile(r'^\s*(?:[-*+]\s+|\d+[.)]\s+)?\**\s*【([^】]{2,60})】')
 
+# 正文里只有这些前缀才是「题」。结构性【】（【国内考法 · …】、【代码验证 · NumPy】、
+# 【三种失效的具体样子 · 自建算例】等）不是题目，不进题目索引——否则每节冒出假「对应题目」。
+TASK_PREFIX = ('自拟', '课后习题', '教材例题', '课堂例题', '真题', '思考题', '总复习题')
+
+
+def _is_task(label):
+    return any(label.startswith(x) for x in TASK_PREFIX)
+
 # 首页速达指向的固定块。正反两个方向共用这一份名单，避免两处各写一套后漂移。
 NAV_BLOCKS = ('本章脉络', '易错点与极客备忘录', '附录 · 题库', '附录：题库', '一页速查')
 
@@ -592,27 +600,38 @@ class Builder:
                     continue
                 if appx:
                     self._index_item(s)
+                elif cur_sec:
+                    # 正文题目行：按所在节挂靠；结构性【】由 _is_task 过滤。
+                    lbl = _item_label(s)
+                    if lbl and _is_task(lbl):
+                        self._index_item(s, sec=cur_sec)
             elif appx:
                 if blk[0] == 'box' and blk[2]:
                     self._index_item(blk[2])
                 for t in blk[-1]:
                     self._index_item(t)
+            elif cur_sec and blk[0] == 'box':
+                # 正文题卡 :::quiz 【标签】标题：按所在节挂靠。
+                if blk[1] == 'quiz' and blk[2] and _is_task(_item_label(blk[2])):
+                    self._index_item(blk[2], sec=cur_sec)
         # 回跳继承用：h3 -> 所属 h2 的书签名。本节自己没有脉络行时退到它的 h3 那行。
         self._h2_of = {h['name']: h.get('parent') for h in self._hlist}
 
-    def _index_item(self, s):
+    def _index_item(self, s, sec=None):
         label = _item_label(s)
         if not label:
             return
-        # 节号两种来源：显式 §X.Y 优先——真题、笔记没有教材题号，只能自己声明挂在
-        # 哪一节；否则回到「习题 6.5 第 1 题」这种自带节号的写法。
-        sec = None
-        m = re.search(r'§\s*(\d+\.\d+)', label)
-        if not m:
-            # 只把「习题 6.5 第 1 题」里的 6.5 当节号；「习题 3.1」是题号，不是节号
-            m = re.match(r'^[^\d]{0,12}?(\d+\.\d+)\s*第', label)
-        if m:
-            sec = m.group(1)
+        # sec 由调用方给定＝正文题按所在节挂靠（【自拟】无节号，标题所在节即挂靠节）。
+        # 没给才从标签提取：显式 §X.Y 优先——真题没有教材题号，只能自己声明挂在哪一节；
+        # 否则回到「习题 6.5 第 1 题」这种自带节号的写法。
+        if sec is None:
+            m = re.search(r'§\s*(\d+\.\d+)', label)
+            if not m:
+                # 只把「习题 6.5 第 1 题」里的 6.5 当节号；「习题 3.1」是题号，不是节号
+                m = re.match(r'^[^\d]{0,12}?(\d+\.\d+)\s*第', label)
+            if m:
+                sec = m.group(1)
+        # 显示文字与 sec 来源无关：正文题（【自拟】等）同样要拼出可读的题签。
         if '真题' in label:
             # 「第 3 题」不足以区分多套卷，保留卷名；§ 只用于挂靠，不进显示文字
             disp = re.sub(r'§\s*\d+\.\d+', '', re.sub(r'^真题\s*', '', label)).strip()
@@ -761,10 +780,10 @@ class Builder:
 
     def _try_anchor(self, p, text):
         """附录条目挂书签：按预扫描顺序消费，标签不一致时向后容忍 2 条。"""
-        if not self._in_appx or self._qi >= len(self._items):
+        if self._qi >= len(self._items):
             return
         label = _item_label(text)
-        if not label:
+        if not label or not _is_task(label):
             return
         k = self._qi
         for j in range(self._qi, min(self._qi + 3, len(self._items))):
@@ -822,12 +841,14 @@ class Builder:
     def link_line(self, sec, hdr):
         """小节标题下的链接行：题目在前（前向），回跳在后（反向）。
 
-        两样都没有就不出行。回跳不另起段落——每节多一行约 14pt，二十节就是三成页；
-        挂进已有的「对应题目」行，多数情况下不涨页。
+        没题就不出行——强制自拟要求每节有题，缺题是源稿缺陷，lint 会报。
+        回跳挂在这一行尾，不另起段落：每节多一行约 14pt，二十节就是三成页。
         """
         items = self._qmap.get(sec) or []
         back = self._back_target(hdr)
-        if not items and not back:
+        if not items:
+            # 强制自拟：每节至少一道题。缺题是源稿缺陷（lint 报 ERROR），
+            # 不是回跳缺载体——不为回跳单造一行，免得没题的节凭空多占 1 行。
             return
         def _ord(it):
             ns = [int(x) for x in re.findall(r'\d+', it['disp'])]

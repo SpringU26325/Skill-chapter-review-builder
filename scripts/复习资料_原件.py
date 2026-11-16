@@ -211,8 +211,12 @@ def scan(only=None, quiet=False, write=False):
 
     # 输出
     print('原件盘点  根目录 %s' % root)
-    print('科目 %d 个，文件 %d 个（已排除 _成品/_生产/临时件）' %
-          (len(subject_dirs(root, only)), total))
+    nsub = len(subject_dirs(root, only))
+    print('科目 %d 个，文件 %d 个（已排除 _成品/_生产/临时件）' % (nsub, total))
+    if not nsub:
+        print('\n[还没有材料] 工作区里没有科目目录：先让用户把主干与补充资料放进'
+              ' Ebooks\\ 或 复习资料\\<科目>\\，再跑本脚本 --write 登记。')
+        print('空工作区先跑 复习资料_init.py 建骨架；此时「0 个」不代表盘点通过。')
 
     if unk:
         print('\n[未知后缀] %d 个 —— 读 references/sources.md 判档，不许猜' % len(unk))
