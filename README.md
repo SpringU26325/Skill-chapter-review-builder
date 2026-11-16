@@ -76,6 +76,8 @@ git clone https://github.com/SpringU26325/Skill-chapter-review-builder.git chapt
 
 WPS 不支持：接管 `Word.Application` 后 COM 层静默失败，且不带 `MML2OMML.XSL`。页数与 PDF 导出、公式转换各依赖其一。
 
+解释器默认取工作区根目录的 `.venv\Scripts\python.exe`，可用 `CRB_PYTHON` 覆盖；工作区没有 `.venv` 时先由用户指定，脚本不会自建虚拟环境。安装任何新依赖前需征得用户同意。
+
 ## 已知限制
 
 - 版式只有一套：七种容器加自动分页，不支持自定义风格。

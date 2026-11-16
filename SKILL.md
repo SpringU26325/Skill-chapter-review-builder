@@ -1,6 +1,6 @@
 ---
 name: chapter-review-builder
-version: 2.2.2
+version: 2.2.3
 description: 单章大学课程复习资料（.docx）的制作、返工与质检：从教材 PDF、课堂课件、笔记中提炼知识点、逐点配题、六项自检、页数与空页检查、关键页视觉验收，经自建引擎输出 LaTeX 原生公式的 Word。覆盖新做章节、上/下/中/拓展分册、题库与一页速查，以及已交付资料的重排、补题、核公式、查页数、重新导出。用户口语里说「提纲」「总结」「速查」「知识脉络」「章节结构」时也走这里。不适用于与复习资料无关的通用 Word 排版美化。
 agent_created: true
 ---
@@ -11,9 +11,13 @@ agent_created: true
 
 需要 **Windows + Microsoft Office**：页数统计与 PDF 导出走 Word COM，公式转换需要 Office 自带的 `MML2OMML.XSL`。不做其他平台适配，**WPS 不行**——它接管 `Word.Application` 后 COM 兼容层会静默失败，且不带 `MML2OMML.XSL`。
 
-Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。**优先用工作区的 `.venv\Scripts\python.exe`**，不要在代码里写死解释器路径。
+Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。解释器按下面三条走，**不要按习惯直接敲 `python`**：
 
-PATH 里的 `python` 往往不是这个 `.venv`，两套依赖不共享——装到另一套不会让构建成功。`build` 与 `重建` 开头都跑 `_env.ensure()`：缺依赖时直接打印当前解释器、工作区 `.venv` 的路径和安装命令，不再抛裸 `ImportError`。
+1. **默认用项目级解释器**：工作区根目录的 `.venv\Scripts\python.exe`。要换别的解释器就设 `CRB_PYTHON`（显式覆盖 `.venv`，工作区没有 `.venv` 时也靠它指定）。PATH 里的 `python` 不算候选——通常是宿主自带的另一个解释器，两套依赖不共享，装到另一边不会让构建成功。
+2. **找不到项目级解释器，先问用户，不要自建**：说明「工作区没有 `.venv`」，给两个选项——用用户指定的解释器（写进 `CRB_PYTHON`），或新建 `.venv`。**未经同意不执行 `python -m venv`**，也不默默退回 PATH 的 `python` 硬跑。
+3. **装新库先问**：缺包的第一反应是「换个解释器重跑」（项目环境里通常早装齐），不是装包。确需安装，先说清三件事——装哪个包、装进哪个解释器的 `site-packages`、为什么现有依赖不够——**得到同意再 `pip install`**。默认不装。
+
+`build` 与 `重建` 开头跑 `_env.ensure()`：缺依赖时打印当前解释器、项目级解释器路径和处置选项，不抛裸 `ImportError`，也不替用户执行安装。
 
 **工作区目录**（按名约定定位，脚本自动上溯找 `复习资料\`，不写绝对路径）。`复习资料\` 根目录只放科目文件夹与 `_生产\`，不散放文件：
 
@@ -56,44 +60,46 @@ PATH 里的 `python` 往往不是这个 `.venv`，两套依赖不共享——装
 
 **下文命令里的 `<skill>` 一律指「本 SKILL.md 所在目录」**——不同宿主把它挂在不同位置（`<工作区>\.agents\skills\chapter-review-builder\`、`~/.codex/skills/…`、其他宿主的 skills 根），不要照抄某个具体路径，也不要把它当成工作区里的目录。搞不清时先 `pwd`/列出本文件路径再拼。
 
+**命令里的 `<py>` 指上一节选定的项目级解释器**，通常是工作区根目录的 `.venv\Scripts\python.exe`。直接写 `python` 会落到 PATH 里那套没有依赖的解释器上，构建必挂——11-15、11-16 两次返工都是这么来的。
+
 ```bash
 # 构建（增量）：只重建 md 比 docx 新的
-python "<skill>\scripts\复习资料_重建.py"
+"<py>" "<skill>\scripts\复习资料_重建.py"
 
 # 预演：只打印待重建清单，不写文件、不加锁
-python "<skill>\scripts\复习资料_重建.py" --dry
+"<py>" "<skill>\scripts\复习资料_重建.py" --dry
 
 # 全量重建（改过引擎后才用这个，会让所有已交付成品重写一遍）
-python "<skill>\scripts\复习资料_重建.py" --all
+"<py>" "<skill>\scripts\复习资料_重建.py" --all
 
 # 单科目 + 附页数统计
-python "<skill>\scripts\复习资料_重建.py" 高等数学 --all --pdf
+"<py>" "<skill>\scripts\复习资料_重建.py" 高等数学 --all --pdf
 
 # 只重建自己这一册（并行会话必用：科目关键字是子串匹配，会连坐别人的章）
-python "<skill>\scripts\复习资料_重建.py" --only 程序设计_第1章 --pdf
+"<py>" "<skill>\scripts\复习资料_重建.py" --only 程序设计_第1章 --pdf
 
 # 交付前审计：四项硬指标 + 公式预检
-python "<skill>\scripts\复习资料_audit.py" <md> <docx>
+"<py>" "<skill>\scripts\复习资料_audit.py" <md> <docx>
 
 # 原件盘点：未登记 / 未知后缀 / 疑似重复 / 登记失效（--write 把未登记行写进 _原件.md）
-python "<skill>\scripts\复习资料_原件.py" [科目] [--write]
+"<py>" "<skill>\scripts\复习资料_原件.py" [科目] [--write]
 
 # md 级前置检查（写 md 之后、构建之前，先跑这个能省一轮返工）
-python "<skill>\scripts\复习资料_lint_md.py" <md> [md2 ...]
+"<py>" "<skill>\scripts\复习资料_lint_md.py" <md> [md2 ...]
 
 # 页数 + 空页筛查（只读 COM，绝不导出）
-python "<skill>\scripts\复习资料_页检.py" <docx> [docx2 ...]
+"<py>" "<skill>\scripts\复习资料_页检.py" <docx> [docx2 ...]
 
 # 视觉验收：准备 → 渲染 → 清理（每章一个私有子目录，并行会话互不覆盖）
-python "<skill>\scripts\复习资料_渲染.py" --prepare <docx>
-python "<skill>\scripts\复习资料_渲染.py" --render          # 只有一个目录时可省参数
-python "<skill>\scripts\复习资料_渲染.py" --clean           # 目录不止一个时必须写：--clean <目录名>
+"<py>" "<skill>\scripts\复习资料_渲染.py" --prepare <docx>
+"<py>" "<skill>\scripts\复习资料_渲染.py" --render          # 只有一个目录时可省参数
+"<py>" "<skill>\scripts\复习资料_渲染.py" --clean           # 目录不止一个时必须写：--clean <目录名>
 ```
 
 **线性代数额外一步**（通用审计不含记号规则，必须单独跑）：
 
 ```bash
-python "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线性代数_第2章上.md
+"<py>" "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线性代数_第2章上.md
 ```
 
 退出码 0 = 全过；1 = 有 ERROR，不许交付。WARN 不阻断，但要在自检报告里逐条说明。
@@ -119,5 +125,5 @@ python "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线�
 ## 移植
 
 1. 整个目录复制到任意宿主的 skills 目录即生效，**包内没有任何宿主目录名、没有机器绝对路径，也没有 `.git`**——版本库放在包外，复制时不会把历史带过去。
-2. 换机器只需装好上面四个 Python 依赖；解释器位置由工作区 `.venv` 或环境自行提供。
+2. 换机器只需装好上面四个 Python 依赖；解释器默认取工作区 `.venv`，也可用 `CRB_PYTHON` 指定。两处都没有时先问用户，不自建虚拟环境、也不装进系统解释器。
 3. `MML2OMML.XSL` 按三级探测：环境变量 `MML2OMML_XSL` → 包内 `assets\MML2OMML.XSL` → Office 安装路径。三级都找不到时报错并提示定位方式，不会静默失败。

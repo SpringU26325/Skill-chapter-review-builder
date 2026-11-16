@@ -184,7 +184,15 @@ PIP_NAME = {'docx': 'python-docx'}
 
 
 def venv_python(root=None):
-    """工作区虚拟环境的解释器路径；不存在返回 None。"""
+    """项目级解释器的路径；都没有返回 None。
+
+    优先级：CRB_PYTHON（显式覆盖，工作区没有 .venv 时也靠它指定）→ 工作区
+    .venv\\Scripts\\python.exe。PATH 里的 python 不算候选——那通常是宿主自带的
+    另一个解释器，依赖不共享。
+    """
+    env = os.environ.get('CRB_PYTHON')
+    if env and os.path.isfile(env):
+        return os.path.abspath(env)
     r = root or find_root()
     if not r:
         return None
@@ -195,9 +203,9 @@ def venv_python(root=None):
 def ensure(need_pymupdf=False):
     """缺依赖时给一条能直接照做的报错，而不是 ImportError 栈。
 
-    解释器选错是最常见的原因：PATH 里的 python 往往不是工作区 .venv，两套依赖
-    不共享，pip 装到另一套不会让构建成功。所以先报当前解释器、再指路到 .venv，
-    最后才给安装命令。
+    两种误判都发生过：把「解释器用错」当成「没装包」，pip 装进了另一套环境；
+    以及在没有 .venv 的机器上直接把包装进系统解释器。所以这里只陈述事实与选项，
+    不替用户决定——安装命令一律标注「先征得用户同意」，缺 .venv 时要求先去问。
     """
     import importlib
     import sys
@@ -212,13 +220,23 @@ def ensure(need_pymupdf=False):
         return
     cur = sys.executable
     vp = venv_python()
+    pkgs = ' '.join(PIP_NAME.get(m, m) for m in miss)
+    same = bool(vp) and os.path.normcase(os.path.abspath(vp)) == \
+        os.path.normcase(os.path.abspath(cur))
     lines = ['缺少 Python 依赖：%s' % '、'.join(miss),
              '当前解释器：%s' % cur]
-    if vp and os.path.normcase(os.path.abspath(vp)) != os.path.normcase(os.path.abspath(cur)):
-        lines += ['这不是工作区虚拟环境，两套依赖不共享——装到另一边不影响这里。',
-                  '改用工作区的解释器重跑（通常已装齐，不必再装任何东西）：',
+    if not vp:
+        lines += ['工作区里没有 .venv，也没有设 CRB_PYTHON。',
+                  '先问用户用哪个解释器、是否新建 .venv——不要自行 python -m venv，',
+                  '也不要直接把包装进当前解释器。用户指定后可固定为：',
+                  '  CRB_PYTHON=<解释器绝对路径>']
+    elif not same:
+        lines += ['这不是项目级解释器，两套依赖不共享——装到另一边不影响这里。',
+                  '改用项目级解释器重跑（通常已装齐，不必再装任何东西）：',
                   '  "%s" <脚本> ...' % vp]
-    lines += ['确要装在当前解释器：',
-              '  "%s" -m pip install %s'
-              % (cur, ' '.join(PIP_NAME.get(m, m) for m in miss))]
+    else:
+        lines += ['当前就是项目级解释器，缺包是环境本身不全。']
+    lines += ['确需安装时先征得用户同意（说明装哪个包、装进哪套 site-packages、',
+              '为什么现有依赖不够），再执行：',
+              '  "%s" -m pip install %s' % (cur, pkgs)]
     raise SystemExit('\n'.join(lines))

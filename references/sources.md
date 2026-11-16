@@ -18,7 +18,7 @@
 | `.html` / `.htm` | 直接读 | 公式若用 MathJax，源码里保留 `\(…\)`，可直接转；若是图片，按 C 档 |
 | `.mhtml` / `.mht` | 单文件网页存档，按 MIME 分段 | 取 `text/html` 段，图片为同文件内 base64。用文本编辑器看边界字符串 `------MultipartBoundary` |
 | `.srt` / `.vtt` / `.ass` | 读字幕文本，按时间戳定位 | 录课字幕比音频转写可靠，单位写 `01:23:45`。口述的公式仍属「仅线索」 |
-| `.xlsx` / `.xls` / `.csv` | 表格 | 本包 `.venv` 无 `openpyxl` / `pandas`；走 `workbuddy-sheetagent`，或让用户另存 csv。定位单位写「表名 + 行号」，不写页码 |
+| `.xlsx` / `.xls` / `.csv` | 表格 | 本包 `.venv` 无 `openpyxl` / `pandas`；走 `workbuddy-sheetagent`，或让用户另存 csv。不要顺手 `pip install`——装包先问用户定位单位写「表名 + 行号」，不写页码 |
 | 源码 `.c` `.cpp` `.h` `.py` `.java` | 直接读 | 程序设计科目的实验代码，用来对齐「本章涉及的库函数与语法点」；**不作为题目来源**，除非用户明确说是实验原题 |
 | `.json` / `.yaml` / `.ini` | 直接读 | OJ 题库导出、配置，定位用 `key` 路径 |
 
