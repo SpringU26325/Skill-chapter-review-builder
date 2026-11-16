@@ -258,6 +258,49 @@ def _check_tree_depth(lines):
     return errs
 
 
+EXT_SRC_RE = re.compile(r'【([^】]*)】')
+
+
+def _check_external_src(lines):
+    """外部资料标签：真题必须可唯一标识，笔记不得进附录。
+
+    真题没有教材题号，只能靠「年份 + 卷别 + 题号」区分；缺年份或卷别时，两套卷的
+    「第 3 题」在「对应题目」行里会显示成同一串文字。`【笔记 …】` 写进附录会被引擎
+    当题库条目索引，显示成「第 N 页」混在题目链接里。
+    """
+    out = []
+    seen = {}
+    in_appx = False
+    for i, line in enumerate(lines, 1):
+        s = line.strip()
+        m2 = re.match(r'^(#{1,3})\s+(.*)$', s)
+        if m2:
+            in_appx = len(m2.group(1)) == 2 and ('附录' in m2.group(2) or '题库' in m2.group(2))
+            continue
+        m = EXT_SRC_RE.search(s)
+        if not m:
+            continue
+        label = m.group(1).strip()
+        if '真题' in label:
+            if not re.search(r'20\d\d', label) or '卷' not in label:
+                out.append(f'  ERROR L{i}: 真题标签缺年份或卷别，多套卷之间无法唯一标识')
+                out.append(f'        | {s[:100]}')
+                out.append('        改：【真题 2024秋期末A卷 第3题】')
+            elif '§' not in label:
+                out.append(f'  WARN  L{i}: 真题未标 §X.Y，小节下不会生成「对应题目」')
+                out.append(f'        | {s[:100]}')
+            if label in seen:
+                out.append(f'  ERROR L{i}: 真题标签与 L{seen[label]} 重复，跳转按顺序消费会错配')
+                out.append(f'        | {s[:100]}')
+            else:
+                seen[label] = i
+        elif label.startswith('笔记') and in_appx:
+            out.append(f'  ERROR L{i}: 笔记条目不能放进附录区，会被索引成题库题目')
+            out.append(f'        | {s[:100]}')
+            out.append('        改：移到正文 :::note 内')
+    return out
+
+
 def check_file(path):
     with open(path, encoding='utf-8') as f:
         text = f.read()
@@ -302,6 +345,12 @@ def check_file(path):
     for e in _check_tree_depth(lines):
         if e.lstrip().startswith('ERROR'):
             n_err += 1
+        out.append(e)
+    for e in _check_external_src(lines):
+        if e.lstrip().startswith('ERROR'):
+            n_err += 1
+        elif e.lstrip().startswith('WARN'):
+            n_warn += 1
         out.append(e)
     out.append(f'  小结：ERROR {n_err} / WARN {n_warn}')
     return out, n_err, n_warn

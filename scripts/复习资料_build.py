@@ -579,12 +579,21 @@ class Builder:
         label = _item_label(s)
         if not label:
             return
-        # 只把「习题 6.5 第 1 题」里的 6.5 当节号；「习题 3.1」是题号，不是节号
+        # 节号两种来源：显式 §X.Y 优先——真题、笔记没有教材题号，只能自己声明挂在
+        # 哪一节；否则回到「习题 6.5 第 1 题」这种自带节号的写法。
         sec = None
-        m = re.match(r'^[^\d]{0,12}?(\d+\.\d+)\s*第', label)
+        m = re.search(r'§\s*(\d+\.\d+)', label)
+        if not m:
+            # 只把「习题 6.5 第 1 题」里的 6.5 当节号；「习题 3.1」是题号，不是节号
+            m = re.match(r'^[^\d]{0,12}?(\d+\.\d+)\s*第', label)
         if m:
             sec = m.group(1)
-        disp = label[label.index('第'):] if '第' in label else label
+        if '真题' in label:
+            # 「第 3 题」不足以区分多套卷，保留卷名；§ 只用于挂靠，不进显示文字
+            disp = re.sub(r'§\s*\d+\.\d+', '', re.sub(r'^真题\s*', '', label)).strip()
+            disp = re.sub(r'\s+', ' ', disp) or label
+        else:
+            disp = label[label.index('第'):] if '第' in label else label
         it = {'label': label, 'disp': disp,
               'name': '_Q%d' % (len(self._items) + 1), 'sec': sec}
         self._items.append(it)
