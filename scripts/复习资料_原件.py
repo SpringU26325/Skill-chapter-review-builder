@@ -267,7 +267,7 @@ def sizeof(n):
 def write_registry(mdpath, subject, rows, create_only=False):
     """追加未登记行；表不存在时建模板。"""
     hdr = ('# %s 原件索引\n\n'
-           '> 本科目的非教材来源资料。新拿到资料先登记再动：文件 → 来源 → 覆盖 → 可信度 → 状态。\n'
+           '> 本科目的原件资料。新拿到资料先登记再动：文件 → 来源 → 覆盖 → 可信度 → 状态。\n'
            '> 可信度口径见 skill 的 `references/intake.md` 第三节；类型判档见 `references/sources.md`。\n\n'
            '| 文件 | 类型 | 来源 / 日期 | 覆盖 | 内容可信度 | 状态 | 已用 |\n'
            '|---|---|---|---|---|---|---|\n') % subject

@@ -7,6 +7,11 @@
   - 只做 ComputeStatistics / GoTo 读操作，**绝不调 ExportAsFixedFormat / SaveAs2**；
   - 优先复用已打开的 Word 实例（GetActiveObject），只 Close 自己打开的文档；
     自己新建的实例才 Quit，不碰别人的文档。
+  - **不隐藏用户窗口**：Visible=0 只对本脚本新建的实例设——11-16 对用户实例设过一次，
+    他的窗口整个消失，看起来就是「Word 被关了」；
+  - **用户已打开的文档一律不关**：`Documents.Open` 对已开的文档返回同一个对象，
+    后面无条件 `Close(0)` 关掉的就是他那一份，未保存的改动直接丢；
+  - **测完还原活动文档与光标**：`GoTo` 会挪走光标，不还原等于擅自动了他看的位置。
 
 用法：python 复习资料_页检.py <docx> [docx2 ...]
 输出：每份文件的页数、每页字符数（<40 标记为疑似空页）。退出码：0 正常 / 2 有疑似空页 / 1 COM 失败。
@@ -84,15 +89,23 @@ def _file_lock(path, timeout=900, what='Word 只读页检'):
 
 PS_TEMPLATE = (
     "$ErrorActionPreference='Stop';"
-    "$own=$false;"
+    "$own=$false;$prevDoc='';$prevSel=0;"
     "try{$w=[Runtime.InteropServices.Marshal]::GetActiveObject('Word.Application')}"
     "catch{$w=New-Object -ComObject Word.Application;$own=$true};"
-    "$w.Visible=$false;$w.DisplayAlerts=0;"
+    # 只隐藏自己起的实例。对用户正在用的实例设 Visible=0，会把他的窗口整个藏掉，
+    # 看起来就是「Word 被关了」——11-16 真实踩过。
+    "if($own){$w.Visible=$false};$w.DisplayAlerts=0;"
+    # 记住用户当前看的文档与光标位置，测完原样还回去
+    "if(-not $own){try{$prevDoc=$w.ActiveDocument.FullName;$prevSel=$w.Selection.Start}catch{}};"
     "try{"
+    # 先记下已经打开的文档：Documents.Open 对已开的文档返回同一个对象，
+    # 后面若无条件 Close(0)，关掉的就是用户那份（他的未保存改动直接丢）。只关自己开的。
+    "$open=@{};foreach($od in @($w.Documents)){$open[$od.FullName]=$true};"
     "$ps=Get-Content -LiteralPath '__LIST__' -Encoding UTF8;"
     "foreach($p in $ps){"
     "if(-not $p.Trim()){continue};"
-    "$d=$w.Documents.Open($p,$false,$true);"          # ReadOnly
+    "$full=[IO.Path]::GetFullPath($p);$had=$open.ContainsKey($full);"
+    "$d=$w.Documents.Open($full,$false,$true);"        # ReadOnly
     "$n=$d.ComputeStatistics(2);"                      # wdStatisticPages
     "Write-Output ('DOC|'+$n);"
     "for($i=1;$i -le $n;$i++){"
@@ -100,11 +113,14 @@ PS_TEMPLATE = (
     "if($i -lt $n){$e=$d.GoTo(1,1,$i+1).Start}else{$e=$d.Content.End};"
     "Write-Output ('PAGE|'+$i+'|'+($e-$s));"           # 页内字符数 = 下页起点 - 本页起点
     "};"
-    "$d.Close(0);"                                     # wdDoNotSaveChanges，只关自己打开的
+    "if(-not $had){$d.Close(0)};"                       # wdDoNotSaveChanges，只关自己打开的
     "};"
     "Write-Output 'ok'"
     "}finally{"
-    "if($own){$w.Quit()};"                             # 只关自己起的实例
+    # 还原用户的活动文档与光标：GoTo 会把光标挪走，不还原等于擅自动了他的位置
+    "if($prevDoc){foreach($od in @($w.Documents)){"
+    "if($od.FullName -eq $prevDoc){$od.Activate();$w.Selection.SetRange($prevSel,$prevSel);break}}}"
+    "if($own){$w.Quit()};"                              # 只关自己起的实例
     "[Runtime.InteropServices.Marshal]::ReleaseComObject($w)|Out-Null;"
     "[GC]::Collect();[GC]::WaitForPendingFinalizers()"
     "}"

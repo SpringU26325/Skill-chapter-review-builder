@@ -82,6 +82,7 @@ ACCENT  = "B03A2E"   # 警示 砖红
 GREEN   = "0E6E5C"   # 结论 墨绿
 GOLD    = "9C7415"   # 注释 赭金
 GREY    = "8A94A0"
+MUTED   = "5F6B78"   # 页眉页脚 比 GREY 深一档：8.5pt 小字压白底，GREY 对比度只有 ~3:1，太淡
 BODY    = "1F2933"
 
 FILL = {
@@ -344,6 +345,9 @@ def link_runs(p, anchor):
 NUM_RE = re.compile(r'^[*\s]*§?\s*(\d+(?:\.\d+)*)')
 ITEM_RE = re.compile(r'^\s*(?:[-*+]\s+|\d+[.)]\s+)?\**\s*【([^】]{2,60})】')
 
+# 首页速达指向的固定块。正反两个方向共用这一份名单，避免两处各写一套后漂移。
+NAV_BLOCKS = ('本章脉络', '易错点与极客备忘录', '附录 · 题库', '附录：题库', '一页速查')
+
 
 def _nztxt(s):
     """标题/脉络行的比较键：去公式、去「的」「§」、统一括号冒号、去装饰横线。"""
@@ -534,7 +538,13 @@ class Builder:
         self._in_appx = False
         self._tree_links_on = False
         self._nav_done = False
-        self.link_stat = {'tree': 0, 'tree_miss': [], 'q': 0, 'item': 0, 'item_miss': 0, 'nav': 0}
+        self._sec_row = {}     # 标题书签名 -> 脉络行书签名，供该节「↑ 脉络」回跳
+        self._sec_row_order = []   # 脉络行书签的渲染顺序，继承回跳时按它取第一行
+        self._h2_of = {}       # h3 书签名 -> 所属 h2，index_anchors 填
+        self._tree_n = 0       # 脉络行书签计数
+        self._nav_bm = None    # 速达行书签名，供四个固定块「↑ 速达」回跳
+        self.link_stat = {'tree': 0, 'tree_miss': [], 'q': 0, 'item': 0, 'item_miss': 0,
+                          'nav': 0, 'back': 0}
 
     def _page(self):
         s = self.doc.sections[0]
@@ -561,7 +571,7 @@ class Builder:
 
     def index_anchors(self, blocks):
         """预扫描：给标题与附录条目编号，供前置的脉络块提前指向后置的小节。"""
-        cur_sec, appx = None, False
+        cur_sec, appx, cur_h2 = None, False, None
         for blk in blocks:
             if blk[0] == 'raw':
                 s = blk[1].strip()
@@ -572,9 +582,13 @@ class Builder:
                         appx = ('附录' in text or '题库' in text)
                         n = NUM_RE.match(text)
                         cur_sec = n.group(1) if n else None
-                    self._hlist.append({'lv': lv, 'text': text,
-                                        'name': '_Sec%d' % (len(self._hlist) + 1),
-                                        'sec': cur_sec if lv >= 2 else None})
+                    entry = {'lv': lv, 'text': text,
+                             'name': '_Sec%d' % (len(self._hlist) + 1),
+                             'sec': cur_sec if lv >= 2 else None,
+                             'parent': cur_h2 if lv == 3 else None}
+                    self._hlist.append(entry)
+                    if lv == 2:
+                        cur_h2 = entry['name']
                     continue
                 if appx:
                     self._index_item(s)
@@ -583,6 +597,8 @@ class Builder:
                     self._index_item(blk[2])
                 for t in blk[-1]:
                     self._index_item(t)
+        # 回跳继承用：h3 -> 所属 h2 的书签名。本节自己没有脉络行时退到它的 h3 那行。
+        self._h2_of = {h['name']: h.get('parent') for h in self._hlist}
 
     def _index_item(self, s):
         label = _item_label(s)
@@ -730,6 +746,14 @@ class Builder:
         if anchor:
             link_runs(p, anchor)
             self.link_stat['tree'] += 1
+            # 反向：给这一行挂书签，供该节「↑ 脉络」点回来。同一节被多行指到
+            # 只认第一行——回跳落点必须稳定，否则同一节在不同册里落点会漂。
+            if anchor not in self._sec_row:
+                self._tree_n += 1
+                bm = '_Tree%d' % self._tree_n
+                add_bookmark(p, bm, self._next_id())
+                self._sec_row[anchor] = bm
+                self._sec_row_order.append(anchor)
         elif depth <= 1:
             self.link_stat['tree_miss'].append(txt.strip()[:40])
         if os.environ.get('CRB_LINK_DEBUG'):
@@ -756,8 +780,7 @@ class Builder:
 
     def nav_line(self):
         """首页速达：指向本篇几块固定结构，省去翻页。缺哪块就不出现哪项。"""
-        want = ('本章脉络', '易错点与极客备忘录', '附录 · 题库', '附录：题库', '一页速查')
-        got = [h for w in want for h in self._hlist if h['text'] == w]
+        got = [h for w in NAV_BLOCKS for h in self._hlist if h['text'] == w]
         if len(got) < 2:
             return
         p = self.doc.add_paragraph()
@@ -772,11 +795,39 @@ class Builder:
                 set_run(s, 8.5, False, GREY, CN_FONT)
             add_link(p, h['text'], h['name'], size=8.5)
             self.link_stat['nav'] += 1
+        # 反向：四个固定块各自回跳到这里。书签盖整段，点回来落在速达行上
+        self._nav_bm = '_Nav'
+        add_bookmark(p, self._nav_bm, self._next_id())
 
-    def question_line(self, sec):
-        """小节标题下的「对应题目」：每个题号一条指向附录条目的链接。"""
+    def _back_target(self, hdr):
+        """本节的回跳目标：(文案, 书签)；连不上返回 None。
+
+        先认脉络行——它才是这节在整章里的位置；固定块没有脉络行，退回速达。
+        「本章脉络」本身不挂速达回跳：速达行就在它上方两三行，指过去是重复。
+        """
+        if not hdr:
+            return None
+        bm = self._sec_row.get(hdr['name'])
+        if bm:
+            return ('↑ 脉络', bm)
+        # 本节自己没上树（脉络只写了它的知识点）：退到本节名下第一个上树的 h3 那行。
+        # 落点仍在这节的子树里，读者看到的是「我这节在树里的第一处」。
+        for name in self._sec_row_order:
+            if self._h2_of.get(name) == hdr['name']:
+                return ('↑ 脉络', self._sec_row[name])
+        if hdr['text'] in NAV_BLOCKS and hdr['text'] != '本章脉络' and self._nav_bm:
+            return ('↑ 速达', self._nav_bm)
+        return None
+
+    def link_line(self, sec, hdr):
+        """小节标题下的链接行：题目在前（前向），回跳在后（反向）。
+
+        两样都没有就不出行。回跳不另起段落——每节多一行约 14pt，二十节就是三成页；
+        挂进已有的「对应题目」行，多数情况下不涨页。
+        """
         items = self._qmap.get(sec) or []
-        if not items:
+        back = self._back_target(hdr)
+        if not items and not back:
             return
         def _ord(it):
             ns = [int(x) for x in re.findall(r'\d+', it['disp'])]
@@ -790,14 +841,21 @@ class Builder:
         # 标题的 keep_with_next 只牵到这一行；这一行若不跟正文同页，
         # 标题就会孤悬页底，正文翻到下一页
         pf.keep_with_next = True
-        r = p.add_run("对应题目 ")
-        set_run(r, 8.5, True, GOLD, CN_FONT)
-        for i, it in enumerate(items):
-            if i:
+        if items:
+            r = p.add_run("对应题目 ")
+            set_run(r, 8.5, True, GOLD, CN_FONT)
+            for i, it in enumerate(items):
+                if i:
+                    s = p.add_run(" · ")
+                    set_run(s, 8.5, False, GREY, CN_FONT)
+                add_link(p, it['disp'], it['name'], size=8.5)
+                self.link_stat['q'] += 1
+        if back:
+            if items:
                 s = p.add_run(" · ")
                 set_run(s, 8.5, False, GREY, CN_FONT)
-            add_link(p, it['disp'], it['name'], size=8.5)
-            self.link_stat['q'] += 1
+            add_link(p, back[0], back[1], size=8.5)
+            self.link_stat['back'] += 1
 
     # 页眉页脚
     def header_footer(self):
@@ -837,7 +895,7 @@ class Builder:
         pl = c0.paragraphs[0]
         pl.alignment = WD_ALIGN_PARAGRAPH.LEFT
         pl.paragraph_format.space_before = Pt(0); pl.paragraph_format.space_after = Pt(0)
-        set_run(pl.add_run(HEADER or "复习资料"), 8.5, False, GREY, CN_FONT)
+        set_run(pl.add_run(HEADER or "复习资料"), 8.5, False, MUTED, CN_FONT)
 
         pr = c1.paragraphs[0]
         pr.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -845,7 +903,7 @@ class Builder:
 
         fp = sec.footer.paragraphs[0]
         fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = fp.add_run(); set_run(r, 9, False, GREY)
+        r = fp.add_run(); set_run(r, 9, False, MUTED)
         fld = OxmlElement('w:fldSimple'); fld.set(qn('w:instr'), 'PAGE')
         fp._p.append(fld)
 
@@ -891,6 +949,7 @@ class Builder:
         if h:
             add_bookmark(p, h['name'], self._next_id())
             set_outline(p, 1)
+        return h          # render 要靠它把本节的回跳目标传给 link_line
 
     def h3(self, text):
         p = self.doc.add_paragraph()
@@ -1230,10 +1289,9 @@ def render(b: Builder, lines):
         elif s.startswith('## '):
             flush()
             title = s[3:].strip()
-            b.h2(title, page_break=(title in ('一页速查', '附录 · 题库')))
+            hdr = b.h2(title, page_break=(title in ('一页速查', '附录 · 题库')))
             mm = NUM_RE.match(title)
-            if mm:
-                b.question_line(mm.group(1))
+            b.link_line(mm.group(1) if mm else None, hdr)
         elif s.startswith('### '):
             flush(); b.h3(s[4:].strip())
         elif s.startswith('$$'):
@@ -1441,8 +1499,9 @@ def main():
         b.header_footer()
         render(b, lines)
         st = b.link_stat
-        print('  跳转: 标题书签 %d | 速达 %d | 脉络链接 %d | 题目链接 %d | 附录条目 %d/%d'
-              % (len(b._hlist), st['nav'], st['tree'], st['q'], st['item'], len(b._items)))
+        print('  跳转: 标题书签 %d | 速达 %d | 脉络链接 %d | 回跳 %d | 题目链接 %d | 附录条目 %d/%d'
+              % (len(b._hlist), st['nav'], st['tree'], st['back'], st['q'],
+                 st['item'], len(b._items)))
         if st['tree_miss']:
             print('  · 脉络中未连接的小节行 %d 条（无同名标题，按纯文本保留）' % len(st['tree_miss']))
             for t in st['tree_miss'][:5]:
