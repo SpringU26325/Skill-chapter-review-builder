@@ -35,8 +35,8 @@ PY = sys.executable
 
 # 以下四项在 main() 里按 --root / 当前目录确定（脚本不猜安装位置，也不写死绝对路径）
 ROOT = None          # 工作区根
-SRC = None           # 源稿目录：<工作区>\复习资料\_源稿
-LOCK_DIR = None      # 锁目录：<工作区>\复习资料\_locks
+SRC = None           # 源稿目录：<工作区>\复习资料\_生产\_源稿
+LOCK_DIR = None      # 锁目录：<工作区>\复习资料\_生产\_locks
 PDF_LIST = None      # 转 PDF 用的临时清单（放锁目录，不污染包）
 
 
@@ -80,7 +80,7 @@ def discover():
     for md in sorted(glob.glob(os.path.join(SRC, '*_第*.md'))):
         base = os.path.basename(md)[:-3]                       # 线性代数_第1章
         subj = base.split('_')[0]
-        out = os.path.join(ROOT, '复习资料', subj, base + '_复习资料.docx')
+        out = os.path.join(_env.out_dir(ROOT, subj), base + '_复习资料.docx')
         items.append((subj, md, out))
     return items
 

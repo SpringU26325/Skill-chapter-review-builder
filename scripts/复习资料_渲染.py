@@ -30,13 +30,13 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = _env.find_root()
-BASE = _env.render_dir(ROOT)                   # 上级目录：复习资料\_render 或 CRB_RENDER_DIR
+BASE = _env.render_dir(ROOT)                   # 上级目录：复习资料\_生产\_render 或 CRB_RENDER_DIR
 PS1_SRC = os.path.join(HERE, 'render.ps1')
 LIST_NAME = '.renderlist.txt'
 MAP_NAME = '.rendermap.txt'
 
 
-_PARENT_SKIP = ('_render', '_源稿', '复习资料', '_迁移', '_locks')
+_PARENT_SKIP = ('_render', '_源稿', '复习资料', '_迁移', '_locks', '_生产', '_成品')
 
 
 def _plain_stem(path):

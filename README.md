@@ -39,7 +39,7 @@
 python "<skill>\scripts\复习资料_重建.py" --only 高等数学_第6章 --pdf
 
 # md 级前置检查
-python "<skill>\scripts\复习资料_lint_md.py" 复习资料\_源稿\高等数学_第6章.md
+python "<skill>\scripts\复习资料_lint_md.py" 复习资料\_生产\_源稿\高等数学_第6章.md
 
 # 构建后审计
 python "<skill>\scripts\复习资料_audit.py" <md> <docx>
@@ -87,12 +87,13 @@ WPS 不支持：接管 `Word.Application` 后 COM 层静默失败，且不带 `M
 
 ```text
 Ebooks\                  教材 PDF，只读
-复习资料\_源稿\           各章 Markdown、<科目>_notation.md
-复习资料\<科目>\          成品 docx
-复习资料\_render\         渲染过程文件，交付即清
-复习资料\_locks\          并发锁，删了保护失效
-复习资料\_台账.md         进度、页码、分册
-复习资料\_踩坑清单.md      引擎、公式、COM 的已知问题
+复习资料\<科目>\          本科目素材：真题、笔记、课件等原件
+复习资料\<科目>\_成品\    成品 docx
+复习资料\_生产\_源稿\     各章 Markdown、<科目>_notation.md
+复习资料\_生产\_render\   渲染过程文件，交付即清
+复习资料\_生产\_locks\    并发锁，删了保护失效
+复习资料\_生产\_台账.md   进度、页码、分册
+复习资料\_生产\_踩坑清单.md  引擎、公式、COM 的已知问题
 ```
 
 命令细节见 `SKILL.md`，md 方言见 `references/md-dialect.md`，写作风格见 `references/wording.md`。

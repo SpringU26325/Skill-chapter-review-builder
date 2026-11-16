@@ -17,11 +17,16 @@ ASSETS = os.path.join(SKILL_DIR, 'assets')
 # 工作区标志目录：向上找它来定位根
 WORKSPACE_MARK = '复习资料'
 
+# 生产目录：源稿、渲染过程、锁、迁移备份与三份台账全部收在 复习资料\_生产\ 下，
+# 复习资料\ 根目录只留科目文件夹（科目根层放原件，成品进 _成品\）。
+PROD_DIR = '_生产'
+OUT_SUB = '_成品'
+
 # 渲染工作目录是否允许中文路径。
 # 2026-11-11 P4-b 实测：源与目标都含中文时 ExportAsFixedFormat 正常（10.3s / 8 页）。
 # 历史上认定的「中文路径导出静默挂住」不成立，真因是 render.ps1 在创建 Word 实例之后
 # 才读取清单，导致导出阻塞；清单改为在 New-Object 之前读取并归一化后即恢复正常。
-# 因此默认允许中文路径：渲染中间件留在工作区 复习资料\_render，不向工作区外写文件。
+# 因此默认允许中文路径：渲染中间件留在工作区 复习资料\_生产\_render，不向工作区外写文件。
 ALLOW_CJK_RENDER_DIR = True
 
 
@@ -94,18 +99,24 @@ def require_root(start=None):
     return root
 
 
+def prod_dir(root):
+    """生产目录：复习资料\\_生产\\。跨科目的工程文件都在这里。"""
+    return os.path.join(root, WORKSPACE_MARK, PROD_DIR)
+
+
 def src_dir(root):
-    return os.path.join(root, WORKSPACE_MARK, '_源稿')
+    return os.path.join(prod_dir(root), '_源稿')
 
 
 def out_dir(root, subj):
-    return os.path.join(root, WORKSPACE_MARK, subj)
+    """成品目录：复习资料\\<科目>\\_成品\\。科目根层留给原件。"""
+    return os.path.join(root, WORKSPACE_MARK, subj, OUT_SUB)
 
 
 def lock_dir(root=None, create=True):
-    """锁目录：工作区内 复习资料\\_locks；定位不到工作区时退到系统临时目录。"""
+    """锁目录：工作区内 复习资料\\_生产\\_locks；定位不到工作区时退到系统临时目录。"""
     if root:
-        d = os.path.join(root, WORKSPACE_MARK, '_locks')
+        d = os.path.join(prod_dir(root), '_locks')
     else:
         d = os.path.join(os.environ.get('TEMP') or os.environ.get('TMP') or '.', 'crb_locks')
     if create:
@@ -121,7 +132,7 @@ def render_candidates(root):
     if env:
         yield os.path.abspath(env)
     if root:
-        in_ws = os.path.join(root, WORKSPACE_MARK, '_render')
+        in_ws = os.path.join(prod_dir(root), '_render')
         if ALLOW_CJK_RENDER_DIR or _is_ascii(in_ws):
             yield in_ws
     for base in (os.environ.get('TEMP'), os.environ.get('TMP')):
@@ -137,7 +148,7 @@ def render_dir(root, create=True):
 
     探测文件必须带 pid：固定名 `.w` 在并行会话下会互相踩——A 建、B 建、A 删、
     B 删时 FileNotFoundError，被 except 吞掉后 B **静默退到下一个候选**，于是
-    `--prepare` 落在 `复习资料\\_render`、`--render` 却去 `TEMP\\crb_render` 找清单，
+    `--prepare` 落在 `复习资料\\_生产\\_render`、`--render` 却去 `TEMP\\crb_render` 找清单，
     报「先 --prepare」。写权限探测本身不能让调用方换目录。
     """
     for d in render_candidates(root):
@@ -159,7 +170,7 @@ def render_dir(root, create=True):
         except OSError:
             continue
     raise SystemExit(
-        '找不到可写的渲染工作目录。已依次尝试：CRB_RENDER_DIR → 工作区 复习资料\\_render'
+        '找不到可写的渲染工作目录。已依次尝试：CRB_RENDER_DIR → 工作区 复习资料\\_生产\\_render'
         ' → 系统 TEMP\\crb_render，均不可写。\n'
         '请设环境变量 CRB_RENDER_DIR 指向一个可写目录（含中文也可以，实测无碍）。')
 

@@ -31,7 +31,7 @@ def warn(f, ln, msg):
 
 
 def notation_path():
-    """记号表在工作区 `复习资料\\_源稿\\线性代数_notation.md`，不在包内。"""
+    """记号表在工作区 `复习资料\\_生产\\_源稿\\线性代数_notation.md`，不在包内。"""
     root = _env.find_root()
     if not root:
         raise SystemExit('定位不到复习资料工作区（当前目录及上级都没有「复习资料」目录）。请在复习资料工作区里执行。')

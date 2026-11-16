@@ -320,7 +320,7 @@ def main():
         total_warn += w
     print(f'\n总计：ERROR {total_err} / WARN {total_warn}')
     if total_err:
-        print('存在 ERROR：先修 md 再构建。规则依据见 复习资料\\_踩坑清单.md')
+        print('存在 ERROR：先修 md 再构建。规则依据见 复习资料\\_生产\\_踩坑清单.md')
     raise SystemExit(2 if total_err else 0)
 
 
