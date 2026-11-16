@@ -1,6 +1,6 @@
 ---
 name: chapter-review-builder
-version: 2.1.0
+version: 2.2.0
 description: 单章大学课程复习资料（.docx）的制作、返工与质检：从教材 PDF、课堂课件、笔记中提炼知识点、逐点配题、六项自检、页数与空页检查、关键页视觉验收，经自建引擎输出 LaTeX 原生公式的 Word。覆盖新做章节、上/下/中/拓展分册、题库与一页速查，以及已交付资料的重排、补题、核公式、查页数、重新导出。用户口语里说「提纲」「总结」「速查」「知识脉络」「章节结构」时也走这里。不适用于与复习资料无关的通用 Word 排版美化。
 agent_created: true
 ---
@@ -73,6 +73,9 @@ python "<skill>\scripts\复习资料_重建.py" --only 程序设计_第1章 --pd
 # 交付前审计：四项硬指标 + 公式预检
 python "<skill>\scripts\复习资料_audit.py" <md> <docx>
 
+# 原件盘点：未登记 / 未知后缀 / 疑似重复 / 登记失效（--write 把未登记行写进 _原件.md）
+python "<skill>\scripts\复习资料_原件.py" [科目] [--write]
+
 # md 级前置检查（写 md 之后、构建之前，先跑这个能省一轮返工）
 python "<skill>\scripts\复习资料_lint_md.py" <md> [md2 ...]
 
@@ -115,11 +118,14 @@ python "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线�
 |---|---|---|
 | 写任何对外文字 | `references/wording.md` | 动笔写回复、报告、交付话术、仓库文档之前 |
 | 摸素材、判定可信度 | `references/intake.md` | 开工前，手里只有 PDF / 课件 / 笔记 |
+| 表外后缀、格式转换命令 | `references/sources.md` | **只在 `intake.md` 表里没有该后缀时读**，平时不读 |
 | 写 md 正文 | `references/authoring.md` | 动手写之前 |
 | md 方言与禁用写法 | `references/md-dialect.md` | 写 md 时随时查 |
 | 自检、视觉验收、拆册 | `references/acceptance.md` | 写完 md、构建后 |
 | 交付、并发、COM 纪律 | `references/delivery.md` | 构建完成后 |
 | 改引擎本身 | `references/engine.md` | **只在改 build.py 时读，平时不用看** |
+
+`references/` 按阶段拆开就是为按需加载：一次会话通常只读 2–3 份。`sources.md` 与 `engine.md` 是长尾清单，**不进默认读取路径**——遇到表外后缀或改引擎时再单独读，不要在开工时整套读完。
 
 ## 移植
 

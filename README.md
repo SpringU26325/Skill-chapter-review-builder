@@ -96,4 +96,4 @@ Ebooks\                  教材 PDF，只读
 复习资料\_生产\_踩坑清单.md  引擎、公式、COM 的已知问题
 ```
 
-命令细节见 `SKILL.md`，md 方言见 `references/md-dialect.md`，写作风格见 `references/wording.md`。
+命令细节见 `SKILL.md`，md 方言见 `references/md-dialect.md`，写作风格见 `references/wording.md`。补充资料的文件类型与转换命令见 `references/sources.md`——**按需读**，只在遇到表外后缀时打开。
