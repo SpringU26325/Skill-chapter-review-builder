@@ -1,6 +1,6 @@
 ---
 name: chapter-review-builder
-version: 2.2.0
+version: 2.2.1
 description: 单章大学课程复习资料（.docx）的制作、返工与质检：从教材 PDF、课堂课件、笔记中提炼知识点、逐点配题、六项自检、页数与空页检查、关键页视觉验收，经自建引擎输出 LaTeX 原生公式的 Word。覆盖新做章节、上/下/中/拓展分册、题库与一页速查，以及已交付资料的重排、补题、核公式、查页数、重新导出。用户口语里说「提纲」「总结」「速查」「知识脉络」「章节结构」时也走这里。不适用于与复习资料无关的通用 Word 排版美化。
 agent_created: true
 ---
@@ -96,21 +96,7 @@ python "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线�
 
 退出码 0 = 全过；1 = 有 ERROR，不许交付。WARN 不阻断，但要在自检报告里逐条说明。
 
-`渲染 --prepare` 之后，**Word COM 那一段必须由 PowerShell 工具执行包内的 `render.ps1`**，且**必须后台执行**（`run_in_background`）再轮询 `.renderlog.txt`——前台调用拉起 GUI 后工具可能提前返回，留下孤儿 Word，两个实例抢同一份 docx 就会弹「文件正在使用」模态框，之后所有 COM 调用（含 `Quit`）都返回 `RPC_E_CALL_REJECTED`，看起来像「导出挂死」。正常一份 8 页资料 8–10 秒出 PDF。
-
-**过程目录按「科目 + 章节」隔离**（11-14 实测）：`--prepare` 不写共享的 `_生产\_render\p1.docx`，而是建 `_生产\_render\<科目>_<章节>\`（如 `_生产\_render\程序设计_第1章\`）放自己的副本、清单、`render.ps1` 与 PNG。**科目必须在目录名里**——只写「第1章」的话，将来两个科目同时做第 1 章就会撞（科目取文件名 `<科目>_第X章` 前缀，取不到时退回所在目录名，一次 `--prepare` 只允许同一科目）。并行会话各占一个目录，就不会出现「同一轮渲染里第 7 页忽然变成另一章」。目录不止一个时 `--render` / `--clean` **拒绝猜**，列出候选让你指定；也不要对 `_生产\_render` 整体做清理，那会删掉别人正在用的过程文件。`CRB_RENDER_DIR` 仍可整体改到别处（私有目录），优先级最高。
-
-`--prepare` **不再删整个目录**：同名目录里的 `pN.docx` 若正被 Word 占着（另一个会话在渲染同一章），直接报错让你等或换私有目录，而不是把人家的清单删掉、副本留下半截。重跑只清自己那一轮的遗留：多余编号的 `pN`、旧 `.renderlog.txt`（里面可能留着上一轮的 `TIMEOUT|`）、旧 `_render_cache`。
-
-并发相关的临时文件全部带 pid：锁目录的 `.pdf_list.<pid>.txt` / `.页检清单.<pid>.txt`、渲染目录的写权限探针 `.w.<pid>`。固定名在并行下会互相删——探针被踩的后果是**静默退回 `TEMP\crb_render`**，随后 `--render` 找不到清单，看着像 `--prepare` 没生效。页检的锁目录按「当前目录 → docx 所在工作区」的顺序定位，不再随 cwd 漂到 `TEMP\crb_locks`（那等于另一把锁，两个 Word 实例会同时起来）。
-
-直接跑 `复习资料_build.py <md> <out.docx>` 也会按科目抢 `.build_<科目>.lock`；由 `复习资料_重建.py` 调用时它已持有同一把锁，靠 `CRB_LOCK_HELD` 传下去避免自锁。绕过重建脚本单册构建时，这就是唯一挡在「两个会话同存一份 docx、后写覆盖前写」前面的东西。
-
-`render.ps1` 自带熔断：日志 180 秒没有新增就记 `TIMEOUT|`、强杀 Word 让阻塞的 COM 立刻抛错，然后收尾退出（阈值可用 `CRB_RENDER_TIMEOUT` 临时调整）。**判读只看日志**——超时同样打印 `FAIL|…远程过程调用失败`，退出码与「只挂了一个文件」没有区别，`TIMEOUT|` 才是挂死的证据。脚本退出前会把本次新起却没退干净的 WINWORD 强杀（日志 `CLEANED leftover`），只杀自己拉起的实例，不动用户开着的窗口。
-
-前提检查：执行前 `WINWORD` 进程数必须为 0、过程目录内无 `~$` 锁文件；有就先让用户点掉模态框，再优雅 `Close(0)` → `Quit()`，不要连刷。中文路径**可以**导出（已实测），不要把挂死归因于路径。
-
-`render.ps1` 里的一个硬约束：**清单必须在 `New-Object -ComObject Word.Application` 之前读取并转成 `[string]`**。改到实例创建之后再读，`ExportAsFixedFormat` 会永久阻塞且不报错。
+导出 PDF 的完整链条（`--prepare` → 执行 `render.ps1` → `--render` → `--clean`）、过程目录隔离、三把锁、看门狗与 Word / PowerPoint 的 COM 纪律，全部在 `references/render.md`——**只在导出、页检、并发构建时读**。必须先知道的三条：`render.ps1` 要后台执行再轮询 `.renderlog.txt`；Word COM 是唯一串行资源（`.pdf.lock` 跨科目排队）；导出结果只认日志里的 `TIMEOUT|`，不认退出码。
 
 ## 阶段索引
 
@@ -122,10 +108,11 @@ python "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线�
 | 写 md 正文 | `references/authoring.md` | 动手写之前 |
 | md 方言与禁用写法 | `references/md-dialect.md` | 写 md 时随时查 |
 | 自检、视觉验收、拆册 | `references/acceptance.md` | 写完 md、构建后 |
-| 交付、并发、COM 纪律 | `references/delivery.md` | 构建完成后 |
+| 交付、多会话协作 | `references/delivery.md` | 构建完成后 |
+| 导出 PDF、页检、并发构建、COM | `references/render.md` | **只在渲染与导出时读**，写 md 阶段不读 |
 | 改引擎本身 | `references/engine.md` | **只在改 build.py 时读，平时不用看** |
 
-`references/` 按阶段拆开就是为按需加载：一次会话通常只读 2–3 份。`sources.md` 与 `engine.md` 是长尾清单，**不进默认读取路径**——遇到表外后缀或改引擎时再单独读，不要在开工时整套读完。
+`references/` 按阶段拆开就是为按需加载：一次会话通常只读 3–4 份。`sources.md`、`render.md`、`engine.md` 是长尾清单，**不进默认读取路径**——遇到表外后缀、要导出、或改引擎时再单独读，不要在开工时整套读完。
 
 ## 移植
 

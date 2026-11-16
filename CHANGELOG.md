@@ -6,6 +6,33 @@
 >
 > **本文件是纯文档，不参与执行**：其中出现的盘符路径仅用于陈述历史缺陷，`scripts\` 内的可执行代码不含任何盘符绝对路径（Office 安装位探测除外，那是读外部软件位置，不是写工作区路径）。机械扫「零绝对路径」时应只扫 `scripts\`。
 
+## 2.2.1 — 2026-11-16
+
+起因：按「加载时机」再审一遍，发现三处该按需加载却留在必读路径上的内容，其中两处已经在重复同一套事实。
+
+### 拆分
+
+- 新增 `references/render.md`（80 行）：合并原先散在三处的渲染内容——`SKILL.md` 的渲染段、`delivery.md` 第五节、`intake.md` 第六节。**只在导出 PDF、页检、并发构建时读**。
+- `SKILL.md` 134 → 121 行：渲染段 19 行压成 1 段指针，阶段索引加 `render.md` 一行并注明不进默认路径。
+- `delivery.md` 88 → 68 行：第五节整体迁出，只留一句「不要在别处复制这套规则」；第四节把锁细节指到 `render.md` 第三章。
+- `intake.md` 第六节 PowerPoint COM 移入 `render.md` 第八节——写 md 阶段不需要它。
+
+### 去重
+
+- `md-dialect.md` 第 8 节删掉命令块，改指 `SKILL.md` 命令速查。两份命令清单并存时漏过 `--only` 与 `--all` 的差别。
+- `authoring.md` 第二节把七行容器表压成一行标签，外观与细则只留在 `md-dialect.md` 第 1 节。
+
+### 工作区
+
+- `_待修缺陷.md` 加「症状索引」：十行现象 → 条目，命中再往下翻；不必为了判断「这是不是已知缺陷」读满 190 行。
+- `_踩坑清单.md` 加目录：按当前在做什么选一节，并标明 COM 的操作细则以 `render.md` 为准。
+
+### 验证
+
+- 从 `HEAD` 版本抽出 20 个特征句（`RPC_E_CALL_REJECTED`、`CRB_RENDER_DIR`、`pN.docx`、`Resiliency`、`Slide.Export`、`无法将 ^0 保存到 ^1` 等）逐条比对，迁移后**全部仍在**。
+- `New-Object -ComObject Word.Application`、`CRB_RENDER_TIMEOUT` 只在 `render.md` 出现一次；其余命中都在 `CHANGELOG` 与 `README` 的历史记述里，不参与执行。
+- `references/` 合计 942 行，但默认读取路径只剩 `wording` / `intake` / `authoring` / `md-dialect` / `acceptance` / `delivery` 六份。
+
 ## 2.2.0 — 2026-11-16
 
 起因：补充资料的类型只覆盖了教材、课件、扫描件、真题、笔记这条主线，`.doc`、`.heic`、多页 `.tiff`、双栏 PDF、字幕、表格、源码都靠临场判断；同时把这些都写进 `intake.md` 会让开工必读的一页变成清单，代价是每次会话的上下文。

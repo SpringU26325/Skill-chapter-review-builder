@@ -82,13 +82,6 @@ PDF 写物理页并注明非印刷页；课件写 `pNN`（幻灯片序号）；�
 
 `@sub`、题卡来源标注、自检报告三处必须用同一种单位。
 
-## 六、PowerPoint COM 纪律
+## 六、PowerPoint COM
 
-与 Word COM 同一套：
-
-- 单实例；`Presentations.Open(path,$true,$false,$false)`；
-- 导出后 `Close()` → `Quit()` → `ReleaseComObject` → `GC`；
-- **禁止强杀 POWERPNT**；
-- 中文路径**不能写进命令行参数、也不能写进 .ps1 字面量**（跨进程传参 / ANSI 解码都会乱码，表现为找不到文件或静默挂住），必须用 **UTF-8 清单文件**传路径，命令行只留 ASCII 的清单路径。**路径本身含中文不影响导出**——这一点在 Word COM 上已实测（11-11），PowerPoint 同样适用；误判常源于把「传参乱码」当成「路径不支持」；
-- `Slide.Export` 的输出路径必须是**反斜杠**，正斜杠报「无法将 ^0 保存到 ^1」；
-- 在 Bash 里调 powershell 会被安全策略拦截，须用 PowerShell 工具。
+与 Word 同一套纪律，见 `references/render.md` 第八节。只在渲染课件出图时读，写 md 阶段不需要。

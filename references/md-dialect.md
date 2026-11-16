@@ -174,18 +174,6 @@
 
 ## 8. 写完自检
 
-```bash
-# md 前置检查（构建前必跑，ERROR 清零）
-python "<skill>\scripts\复习资料_lint_md.py" <md>
-
-# 线性代数额外：记号规则
-python "<skill>\scripts\lint\线性代数_lint.py" <md>
-
-# 构建 + 页数（超 15 页会标出来）
-python "<skill>\scripts\复习资料_重建.py" 线性代数 --pdf
-
-# 并行会话里只报自己那册，别连坐别人的章
-python "<skill>\scripts\复习资料_重建.py" --only 线性代数_第1章 --pdf
-```
+命令见 `SKILL.md`「命令速查」，**不在这里重复**（两份命令清单必然漂移，`--only`、`--all` 的差别就漏过一次）。顺序固定：`lint_md` → 线性代数加 `线性代数_lint.py` → `重建 --pdf` → `页检`。
 
 `lint` 的 ERROR 必须为 0；WARN（「正文未写记号框」）属正常，构建时会从 `<科目>_notation.md` 自动注入。
