@@ -22,7 +22,7 @@ stem，可带「上/下/中」后缀），它优先于位置参数。
      不会互相覆盖，也不会抢 Word COM 实例。
   3. **默认增量**：各科只重建自己改过的章节，互不干扰。
 """
-import os, sys, io, time, glob, subprocess
+import os, re, sys, io, time, glob, subprocess
 from contextlib import contextmanager
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -99,6 +99,11 @@ def build_one(md, out, subj):
     if r.returncode != 0:
         tail = (r.stderr or r.stdout or '').strip().splitlines()[-3:]
         return False, ' / '.join(tail)
+    # 构建成功但公式转换有失败：文件能打开，内容有缺口，必须让调用方看见，
+    # 不能因为退出码 0 就当成干净交付。
+    m = re.search(r'公式失败 (\d+) 处', r.stdout or '')
+    if m and int(m.group(1)):
+        return True, '公式失败 %s 处（成品里为空白或原始 LaTeX）' % m.group(1)
     return True, ''
 
 
@@ -194,6 +199,10 @@ def main():
         print('新科目接入时，先把 md 放进该目录（文件名 <科目>_第X章.md）')
         return
 
+    # 依赖预检：重建用子进程跑 build，缺依赖会整批 FAIL，而报错只留 3 行 tail。
+    # 在这里一次性拦住，直接指出该用哪个解释器。
+    _env.ensure()
+
     all_items = discover()
     if only:
         items = [it for it in all_items if _only_match(_stem(it[1]), only)]
@@ -244,14 +253,18 @@ def main():
             print('  无')
         return
 
-    ok = fail = 0
+    ok = fail = badmath = 0
     done_paths = []
     for subj, md, out in todo:
         with build_lock(subj):                 # 按科目分锁，不同科目可并行
             good, msg = build_one(md, out, subj)
         name = os.path.basename(md)[:-3]
         if good:
-            print(f'  OK   {name}')
+            if msg:
+                print(f'  OK*  {name}  {msg}')
+                badmath += 1
+            else:
+                print(f'  OK   {name}')
             ok += 1
             done_paths.append(out)
         else:
@@ -266,7 +279,8 @@ def main():
             flag = '  << 超 15 页' if pages > 15 else ''
             print(f'  {os.path.basename(p)[:-5]:32s} PAGES={pages:3d} CHARS={chars}{flag}')
 
-    print(f'\n完成：成功 {ok}，失败 {fail}')
+    tail = f'，其中公式失败 {badmath} 份' if badmath else ''
+    print(f'\n完成：成功 {ok}，失败 {fail}{tail}')
 
 
 if __name__ == '__main__':

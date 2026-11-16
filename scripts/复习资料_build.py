@@ -7,6 +7,12 @@
 import re, copy, sys, io, unicodedata, os
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
+# 依赖自检必须在第三方 import 之前：否则缺依赖抛的是裸 ImportError 栈，看不出
+# 「该用哪个解释器」，实测会被误判成「没装包」而去 pip install 到另一个环境。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import find_xsl, find_root, lock_dir, ensure as _ensure_deps
+_ensure_deps()
+
 import latex2mathml.converter as l2m
 from lxml import etree
 from docx import Document
@@ -21,7 +27,6 @@ MD     = sys.argv[1] if len(sys.argv) > 1 else ""
 OUT    = sys.argv[2] if len(sys.argv) > 2 else ""
 HEADER = sys.argv[3] if len(sys.argv) > 3 else ""
 NOTATION_MD = sys.argv[4] if len(sys.argv) > 4 else ""
-from _env import find_xsl, find_root, lock_dir
 
 XSL = find_xsl()          # 环境变量 → 包内 assets → Office 安装目录，三级探测
 
@@ -430,11 +435,15 @@ def _shrink_omml(el, pt):
                     rPr.append(e)
 
 
+MATH_FAIL = []          # 转换失败的 tex 原文，构建结束时汇总，非空即内容有缺口
+
+
 def add_math(p, tex, size=None):
     try:
         el = copy.deepcopy(tex2omml(tex))
     except Exception as e:
         r = p.add_run(tex); set_run(r, color=ACCENT)
+        MATH_FAIL.append(tex)
         print(f"  !! 公式失败: {tex[:50]} -> {e}")
         return
     for t in el.iter('{%s}t' % NS_M):
@@ -1440,6 +1449,15 @@ def main():
                 print('      -', t)
         if st['item_miss']:
             print('  ! 附录条目未挂书签 %d 条（标签与预扫描不一致）' % st['item_miss'])
+        if MATH_FAIL:
+            uniq = []
+            for t in MATH_FAIL:
+                if t not in uniq:
+                    uniq.append(t)
+            print('  !! 公式失败 %d 处（去重 %d 条，成品里该处是原始 LaTeX 或空白，必须修源稿）'
+                  % (len(MATH_FAIL), len(uniq)))
+            for t in uniq[:5]:
+                print('      - %s' % t[:60])
         polish_math(b.doc)
         trim_trailing_empty(b.doc)
         import os

@@ -1,6 +1,6 @@
 ---
 name: chapter-review-builder
-version: 2.2.1
+version: 2.2.2
 description: 单章大学课程复习资料（.docx）的制作、返工与质检：从教材 PDF、课堂课件、笔记中提炼知识点、逐点配题、六项自检、页数与空页检查、关键页视觉验收，经自建引擎输出 LaTeX 原生公式的 Word。覆盖新做章节、上/下/中/拓展分册、题库与一页速查，以及已交付资料的重排、补题、核公式、查页数、重新导出。用户口语里说「提纲」「总结」「速查」「知识脉络」「章节结构」时也走这里。不适用于与复习资料无关的通用 Word 排版美化。
 agent_created: true
 ---
@@ -11,7 +11,9 @@ agent_created: true
 
 需要 **Windows + Microsoft Office**：页数统计与 PDF 导出走 Word COM，公式转换需要 Office 自带的 `MML2OMML.XSL`。不做其他平台适配，**WPS 不行**——它接管 `Word.Application` 后 COM 兼容层会静默失败，且不带 `MML2OMML.XSL`。
 
-Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。优先用工作区的 `.venv`，缺失时 `scripts/_env.py` 会给出明确报错，不要在代码里写死解释器路径。
+Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。**优先用工作区的 `.venv\Scripts\python.exe`**，不要在代码里写死解释器路径。
+
+PATH 里的 `python` 往往不是这个 `.venv`，两套依赖不共享——装到另一套不会让构建成功。`build` 与 `重建` 开头都跑 `_env.ensure()`：缺依赖时直接打印当前解释器、工作区 `.venv` 的路径和安装命令，不再抛裸 `ImportError`。
 
 **工作区目录**（按名约定定位，脚本自动上溯找 `复习资料\`，不写绝对路径）。`复习资料\` 根目录只放科目文件夹与 `_生产\`，不散放文件：
 

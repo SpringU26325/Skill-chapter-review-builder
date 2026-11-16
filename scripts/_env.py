@@ -179,18 +179,46 @@ def render_dir(root, create=True):
 
 REQUIRED = ('docx', 'latex2mathml', 'lxml')
 
+# import 名 → pip 名，只有不一致的才列出来
+PIP_NAME = {'docx': 'python-docx'}
+
+
+def venv_python(root=None):
+    """工作区虚拟环境的解释器路径；不存在返回 None。"""
+    r = root or find_root()
+    if not r:
+        return None
+    p = os.path.join(r, '.venv', 'Scripts', 'python.exe')
+    return p if os.path.exists(p) else None
+
 
 def ensure(need_pymupdf=False):
-    """缺依赖时给一条能直接照做的报错，而不是 ImportError 栈。"""
+    """缺依赖时给一条能直接照做的报错，而不是 ImportError 栈。
+
+    解释器选错是最常见的原因：PATH 里的 python 往往不是工作区 .venv，两套依赖
+    不共享，pip 装到另一套不会让构建成功。所以先报当前解释器、再指路到 .venv，
+    最后才给安装命令。
+    """
     import importlib
+    import sys
+    need = list(REQUIRED) + (['pymupdf'] if need_pymupdf else [])
     miss = []
-    for m in REQUIRED + (('pymupdf',) if need_pymupdf else ()):
+    for m in need:
         try:
             importlib.import_module(m)
         except ImportError:
             miss.append(m)
-    if miss:
-        raise SystemExit(
-            '缺少 Python 依赖：%s\n'
-            '在工作区 .venv 里装：python -m pip install %s'
-            % ('、'.join(miss), ' '.join(miss)))
+    if not miss:
+        return
+    cur = sys.executable
+    vp = venv_python()
+    lines = ['缺少 Python 依赖：%s' % '、'.join(miss),
+             '当前解释器：%s' % cur]
+    if vp and os.path.normcase(os.path.abspath(vp)) != os.path.normcase(os.path.abspath(cur)):
+        lines += ['这不是工作区虚拟环境，两套依赖不共享——装到另一边不影响这里。',
+                  '改用工作区的解释器重跑（通常已装齐，不必再装任何东西）：',
+                  '  "%s" <脚本> ...' % vp]
+    lines += ['确要装在当前解释器：',
+              '  "%s" -m pip install %s'
+              % (cur, ' '.join(PIP_NAME.get(m, m) for m in miss))]
+    raise SystemExit('\n'.join(lines))

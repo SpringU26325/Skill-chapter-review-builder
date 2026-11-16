@@ -301,6 +301,78 @@ def _check_external_src(lines):
     return out
 
 
+# ---------- 转换链不认 / 会静默出错的写法 ----------
+# 这三条构建不报错、audit 也查不出（空公式里连反斜杠都没有），只有打开 docx
+# 才看得见。换模型时最容易在这里翻车，所以全部拦在 lint。
+
+def _dd_block_lines(lines):
+    """多行 $$…$$ 块占用的行号（1-based）；单行 $$…$$ 不计。"""
+    out, in_dd = set(), False
+    for i, line in enumerate(lines, 1):
+        odd = line.count('$$') % 2 == 1
+        if in_dd:
+            out.add(i)
+            if odd:
+                in_dd = False
+            continue
+        if odd:
+            in_dd = True
+            out.add(i)
+    return out
+
+
+def _check_engine_math(lines, code_lines):
+    """矩阵简写与 \\underline：引擎不认，成品里变平铺字符或空白。"""
+    errs = []
+    dd = _dd_block_lines(lines)
+    for i, line in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        if '[[' in line and ('$' in line or i in dd):
+            errs.append(f'  ERROR L{i}: 数学里的 `[[…]]` 不是引擎语法，只会当普通字符平铺'
+                        f'（实测成品是 `[1,0.2],[0,0.8]`，相邻两个还粘连）；'
+                        f'矩阵写 \\begin{{bmatrix}} 并放 $$ 块级（行内禁 \\begin），或改文字描述')
+            errs.append(f'        | {line.strip()[:100]}')
+        if '\\underline' in line:
+            errs.append(f'  ERROR L{i}: \\underline{{…}} 经 latex2mathml 变成 munder，引擎不支持，'
+                        f'成品里该公式整段为空；填空直接写 ____')
+            errs.append(f'        | {line.strip()[:100]}')
+    return errs
+
+
+def _check_appendix(lines):
+    """有题卡就必须有「附录 · 题库」，且附录里要有 `【…】` 条目。
+
+    引擎的 appx 开关只认含「附录 / 题库」的二级标题。缺了它 _qmap 恒空：
+    每节少一行「对应题目」、题卡没有 _Q 书签，构建只打印「题目链接 0」——
+    不报错、不失败，跳转整体失效。
+    """
+    quiz = sum(1 for l in lines if l.strip().startswith(':::quiz'))
+    if quiz < 4:
+        return []
+    head = None
+    for i, l in enumerate(lines):
+        m = re.match(r'^##\s+(.*)$', l.strip())
+        if m and ('附录' in m.group(1) or '题库' in m.group(1)):
+            head = i
+            break
+    if head is None:
+        return [f'  ERROR L?: 有 {quiz} 道题卡却没有「## 附录 · 题库」——题库索引为空，'
+                f'各节「对应题目」行与题卡书签都不会生成（构建只显示「题目链接 0」，不报错）',
+                '        改：在「## 一页速查」之前补 `## 附录 · 题库`，'
+                '用 `:::flow 先做题` + `1. 【课后习题 10.5 第 1 题】…` 列未配答案的题']
+    body = []
+    for l in lines[head + 1:]:
+        if re.match(r'^##\s+', l.strip()):
+            break
+        body.append(l)
+    if not any('【' in l for l in body):
+        return [f'  ERROR L{head + 1}: 附录区没有 `【…】` 条目，题库索引仍为空，'
+                f'「对应题目」行不会生成',
+                '        改：每条写成 `1. 【课后习题 10.5 第 1 题】题干…`']
+    return []
+
+
 def check_file(path):
     with open(path, encoding='utf-8') as f:
         text = f.read()
@@ -351,6 +423,10 @@ def check_file(path):
             n_err += 1
         elif e.lstrip().startswith('WARN'):
             n_warn += 1
+        out.append(e)
+    for e in _check_engine_math(lines, code_lines) + _check_appendix(lines):
+        if e.lstrip().startswith('ERROR'):
+            n_err += 1
         out.append(e)
     out.append(f'  小结：ERROR {n_err} / WARN {n_warn}')
     return out, n_err, n_warn
