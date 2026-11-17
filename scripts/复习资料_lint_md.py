@@ -13,6 +13,7 @@
 docx 生成后的后置检查仍用 复习资料_audit.py，两者不可互替。
 """
 import io
+import os
 import re
 import sys
 
@@ -420,6 +421,90 @@ def _check_section_tasks(lines):
     return out
 
 
+IMG_RE = re.compile(r'^!\[(?P<cap>[^\]]*)\]\((?P<src>[^)]+)\)\s*'
+                    r'(?:\{w=(?P<w>[\d.]+)\})?\s*$')
+IMG_EXT = ('.png', '.jpg', '.jpeg')
+IMG_DPI = 300.0
+PAGE_W_CM = 16.6
+
+
+def _png_px(path):
+    """PNG 的 IHDR 像素宽；读不到返回 None（jpg 不解析）。"""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(33)
+    except OSError:
+        return None
+    if head[:8] == b'\x89PNG\r\n\x1a\n' and head[12:16] == b'IHDR':
+        return int.from_bytes(head[16:20], 'big') or None
+    return None
+
+
+def _check_images(lines, code_lines, md_path):
+    """图片行：路径、图注、扩展名、宽度、登记。
+
+    表格与公式不走这条通道（表格写成 md 表格、公式走 LaTeX），所以这里只管
+    「本身就是图」的内容。图必须登记在 figures\\_图索引.md：主干换版后要靠那一行
+    回查是哪一页裁的。
+    """
+    errs = []
+    base = os.path.dirname(os.path.abspath(md_path))
+    idx_path = os.path.join(base, 'figures', '_图索引.md')
+    idx_txt = ''
+    if os.path.isfile(idx_path):
+        with open(idx_path, encoding='utf-8') as f:
+            idx_txt = f.read()
+
+    seen = {}
+    for i, ln in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        s = ln.strip()
+        if not s.startswith('!['):
+            continue
+        m = IMG_RE.match(s)
+        if not m:
+            errs.append('  ERROR L%d: 图片行写法不合规，应为 ![图注](路径)，可带 {w=6.4}；'
+                        '路径里不要出现括号' % i)
+            continue
+        cap, src, w = m.group('cap').strip(), m.group('src').strip(), m.group('w')
+        if not cap:
+            errs.append('  ERROR L%d: 图注为空——图下没有文字，读者与检索都认不出它是什么' % i)
+        ext = os.path.splitext(src)[1].lower()
+        if ext not in IMG_EXT:
+            errs.append('  ERROR L%d: 只支持 png/jpg，当前是 %s' % (i, ext or '(无扩展名)'))
+        full = src if os.path.isabs(src) else os.path.normpath(os.path.join(base, src))
+        exists = os.path.isfile(full)
+        if not exists:
+            errs.append('  ERROR L%d: 图片不存在：%s（相对 md 解析为 %s）' % (i, src, full))
+        if w:
+            try:
+                wv = float(w)
+                if wv <= 0 or wv > PAGE_W_CM:
+                    errs.append('  ERROR L%d: {w=%s} 超出 0–%.1fcm 版心' % (i, w, PAGE_W_CM))
+            except ValueError:
+                errs.append('  ERROR L%d: {w=%s} 不是数字' % (i, w))
+        elif exists and ext == '.png':
+            px = _png_px(full)
+            if px:
+                cm = px / IMG_DPI * 2.54
+                if cm > PAGE_W_CM:
+                    errs.append('  ERROR L%d: 不写 {w=} 时按 300dpi 折算宽 %.1fcm，'
+                                '超出版心 %.1fcm；写 {w=…} 收窄' % (i, cm, PAGE_W_CM))
+        if exists:
+            name = os.path.basename(src)
+            if not idx_txt:
+                errs.append('  WARN  L%d: 有图但同目录没有 figures\\_图索引.md，'
+                            '主干换版后无法回查这张图是从哪页裁的' % i)
+            elif name not in idx_txt:
+                errs.append('  WARN  L%d: %s 未登记在 _图索引.md' % (i, name))
+        seen[src] = seen.get(src, 0) + 1
+    for src, n in seen.items():
+        if n > 1:
+            errs.append('  WARN  : 同一张图引用了 %d 次（%s）；重复贴图多半是复制粘贴带过来的' % (n, src))
+    return errs
+
+
 def check_file(path):
     with open(path, encoding='utf-8') as f:
         text = f.read()
@@ -474,6 +559,12 @@ def check_file(path):
     for e in _check_engine_math(lines, code_lines) + _check_appendix(lines) + _check_section_tasks(lines):
         if e.lstrip().startswith('ERROR'):
             n_err += 1
+        out.append(e)
+    for e in _check_images(lines, code_lines, path):
+        if e.lstrip().startswith('ERROR'):
+            n_err += 1
+        elif e.lstrip().startswith('WARN'):
+            n_warn += 1
         out.append(e)
     out.append(f'  小结：ERROR {n_err} / WARN {n_warn}')
     return out, n_err, n_warn

@@ -448,6 +448,44 @@ def _shrink_omml(el, pt):
 
 
 MATH_FAIL = []          # 转换失败的 tex 原文，构建结束时汇总，非空即内容有缺口
+IMG_FAIL = []           # 插不进去的图片行（路径不存在、写法不合规），同样必须清零
+IMG_OK = [0]            # 成功插入的图片数，用于和 audit 的 media 数对账
+
+# ![图注](相对路径){w=6.4} —— 独占一行。路径按 md 所在目录解析；不要用带括号的文件名，
+# 正则到第一个 ) 就截断了。
+IMG_RE = re.compile(r'^!\[(?P<cap>[^\]]*)\]\((?P<src>[^)]+)\)\s*'
+                    r'(?:\{w=(?P<w>[\d.]+)\})?\s*$')
+IMG_EXT = ('.png', '.jpg', '.jpeg')
+IMG_DPI = 300.0         # 裁图脚本固定出 300dpi；宽度换算与它绑定，改一处要改两处
+
+
+def _png_px_width(path):
+    """读 PNG 的 IHDR 宽（像素）；读不到返回 None。jpg 不解析 SOF，不做半吊子兼容。"""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(33)
+    except OSError:
+        return None
+    if head[:8] == b'\x89PNG\r\n\x1a\n' and head[12:16] == b'IHDR':
+        return int.from_bytes(head[16:20], 'big') or None
+    return None
+
+
+def img_width_cm(path, override=None):
+    """显示宽度（cm）：显式 {w=} 优先；否则按 300dpi 还原主干上的物理尺寸，夹在 3–16.6。
+
+    裁图脚本按裁切框的 pt 尺寸乘 300dpi 出图，所以「像素 ÷ 300 × 2.54」正好等于这张图
+    在教材上原本多大——比手写一个 cm 数可靠。jpg 读不到像素时退 12cm。
+    """
+    if override:
+        try:
+            return float(override)
+        except ValueError:
+            pass
+    w = _png_px_width(path)
+    if not w:
+        return 12.0
+    return min(max(w / IMG_DPI * 2.54, 3.0), 16.6)
 
 
 def add_math(p, tex, size=None):
@@ -1000,6 +1038,53 @@ class Builder:
         pf.line_spacing = 1.15
         add_math(p, tex)
 
+    def _pic(self, container, caption, rel_src, override=None, space_after=9):
+        """在 container（doc 或表格单元格）里插一张图 + 图注。
+
+        只收「本身就是图」的内容：流程图符号、结构框图、受力图、波形图。表格写成
+        文字表格、公式走 LaTeX，两者都不进这条通道。
+
+        宽度：显式 {w=…} 优先；没写就按「像素 ÷ 300dpi」还原主干上的物理尺寸——
+        裁图脚本固定 300dpi 出图，所以这个换算等于原书里这张图原本多大。
+        """
+        src = rel_src if os.path.isabs(rel_src) else os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(MD)), rel_src))
+        if not src.lower().endswith(IMG_EXT):
+            IMG_FAIL.append('%s（扩展名只支持 png/jpg）' % rel_src)
+            return None
+        if not os.path.isfile(src):
+            IMG_FAIL.append('%s（文件不存在：%s）' % (rel_src, src))
+            return None
+        w_cm = img_width_cm(src, override)
+        if w_cm > 16.6:
+            IMG_FAIL.append('%s（宽 %.1fcm 超过版心 16.6cm，用 {w=…} 收窄）' % (rel_src, w_cm))
+            return None
+        p = container.add_paragraph()
+        pf = p.paragraph_format
+        pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pf.space_before = Pt(6); pf.space_after = Pt(2)
+        pf.keep_with_next = True        # 图与图注不能被分页拆开
+        pf.keep_together = True
+        try:
+            p.add_run().add_picture(src, width=Cm(w_cm))
+        except Exception as e:
+            IMG_FAIL.append('%s（插入失败：%s: %s）' % (rel_src, type(e).__name__, e))
+            return None
+        IMG_OK[0] += 1
+        if not caption:
+            IMG_FAIL.append('%s（图注为空）' % rel_src)
+            return p
+        cp = container.add_paragraph()
+        cpf = cp.paragraph_format
+        cpf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cpf.space_before = Pt(2); cpf.space_after = Pt(space_after)
+        cpf.keep_together = True
+        set_run(cp.add_run(caption), 8.0, False, MUTED, CN_FONT)
+        return p
+
+    def img(self, caption, rel_src, override=None):
+        return self._pic(self.doc, caption, rel_src, override)
+
     def bullet(self, text, idx=None):
         p = self.doc.add_paragraph()
         pf = p.paragraph_format
@@ -1137,6 +1222,16 @@ class Builder:
             s = ln.strip()
             if not s:
                 continue
+            if s.startswith('!['):
+                # 配图题：图放在题干之前/之后均可，独立成段
+                m = IMG_RE.match(s)
+                if m:
+                    self._pic(cell, m.group('cap').strip(), m.group('src').strip(),
+                              m.group('w'), space_after=3)
+                else:
+                    IMG_FAIL.append('%s（题卡内图片行写法不合规）' % s[:60])
+                started = True
+                continue
             p = target if (not started and target is not None) else cell.add_paragraph()
             started = True
             pf = p.paragraph_format
@@ -1167,6 +1262,16 @@ class Builder:
         i = 0
         while i < len(lines):
             s = lines[i].strip()
+            if s.startswith('!['):
+                flush()
+                m = IMG_RE.match(s)
+                if m:
+                    self._pic(cell, m.group('cap').strip(), m.group('src').strip(),
+                              m.group('w'), space_after=3)
+                else:
+                    IMG_FAIL.append('%s（容器内图片行写法不合规）' % s[:60])
+                i += 1
+                continue
             if s.startswith('$$'):
                 flush()
                 tex = s.strip('$')
@@ -1317,6 +1422,15 @@ def render(b: Builder, lines):
             flush(); b.h3(s[4:].strip())
         elif s.startswith('$$'):
             flush(); b.math(s.strip('$'))
+        elif s.startswith('!['):
+            # 图片必须独占一行且单独成段：落进 buf 会被 flush() 用空格拼进正文段落，
+            # 图就插不进来（这是本分支要放在 else 之前的原因）。
+            flush()
+            m = IMG_RE.match(s)
+            if m:
+                b.img(m.group('cap').strip(), m.group('src').strip(), m.group('w'))
+            else:
+                IMG_FAIL.append('%s（写法应为 ![图注](路径)，可带 {w=6.4}）' % s[:60])
         elif s.startswith('|') and i + 1 < len(blocks) and blocks[i+1][0] == 'raw' and re.match(r'^\|[\s:|-]+\|$', blocks[i+1][1].strip()):
             flush()
             rows = []
@@ -1529,6 +1643,12 @@ def main():
                 print('      -', t)
         if st['item_miss']:
             print('  ! 附录条目未挂书签 %d 条（标签与预扫描不一致）' % st['item_miss'])
+        if IMG_OK[0] or IMG_FAIL:
+            print('  插图 %d 张；失败 %d 处' % (IMG_OK[0], len(IMG_FAIL)))
+        if IMG_FAIL:
+            print('  !! 图片失败清单（成品里该处无图，必须修源稿后重建）：')
+            for t in IMG_FAIL[:6]:
+                print('      - %s' % t)
         if MATH_FAIL:
             uniq = []
             for t in MATH_FAIL:

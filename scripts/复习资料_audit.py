@@ -46,6 +46,9 @@ for kind, items in (('DISPLAY', display), ('INLINE', inline)):
             print(f"[ERROR] {kind}: {t[:70]} -> {type(e).__name__}: {e}"); bad += 1
 print(f"公式总数 {len(display) + len(inline)}（独立 {len(display)} / 行内 {len(inline)}），转换失败 {bad}")
 
+# 图片引用（code 块内已在上面的 body 里置空，不会误计）
+img_refs = re.findall(r'^!\[[^\]]*\]\(([^)\s]+)\)', body, re.M)
+
 # ---------- 2. docx 侧四项硬指标 ----------
 z = zipfile.ZipFile(DOCX)
 names = z.namelist()
@@ -65,7 +68,14 @@ nary = doc.count('<m:nary')
 d = doc.count('<m:d>')
 mm = doc.count('<m:m>')
 
-print(f"media 文件 {len(media)} 个；drawing/pict/object {draw} 个（应为 0）")
+ndraw = doc.count('<w:drawing')
+npict = doc.count('<w:pict') + doc.count('<w:object')
+print(f"图片：md 引用 {len(img_refs)} 张；media {len(media)} 个（同图复用会去重）"
+      f"；drawing {ndraw} 个；pict/object {npict} 个（应为 0）")
+if ndraw != len(img_refs):
+    print(f"[FAIL] drawing {ndraw} ≠ md 图片引用 {len(img_refs)}：有图没插进去，或多插了")
+if npict:
+    print(f"[FAIL] pict/object {npict} 个：旧式图形或嵌入对象，一律不允许")
 print(f"m:r {mruns} 个；Cambria Math {cambria} 次（应≈m:r）")
 print(f"m:t 中 U+1D400–1D7FF 字符 {uni_math} 个（应为 0）")
 print(f"m:t 中反斜杠 {backslash}、美元符 {dollar}（应为 0）；m:mtext {mtext}（应为 0）")
