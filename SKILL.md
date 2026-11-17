@@ -1,6 +1,6 @@
 ---
 name: chapter-review-builder
-version: 2.4.1
+version: 2.4.2
 description: 单章大学课程复习资料（.docx）的制作、返工与质检：从教材 PDF、课堂课件、笔记中提炼知识点、逐点配题、六项自检、页数与空页检查、关键页视觉验收，经自建引擎输出 LaTeX 原生公式的 Word。覆盖新做章节、上/下/中/拓展分册、题库与一页速查，以及已交付资料的重排、补题、核公式、查页数、重新导出。用户口语里说「提纲」「总结」「速查」「知识脉络」「章节结构」时也走这里。不适用于与复习资料无关的通用 Word 排版美化。
 agent_created: true
 ---
@@ -114,7 +114,7 @@ Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。解释器�
 
 退出码 0 = 全过；1 = 有 ERROR，不许交付。WARN 不阻断，但要在自检报告里逐条说明。
 
-导出 PDF 的完整链条（`--prepare` → 执行 `render.ps1` → `--render` → `--clean`）、过程目录隔离、三把锁、看门狗与 Word / PowerPoint 的 COM 纪律，全部在 `references/render.md`——**只在导出、页检、并发构建时读**。必须先知道的三条：`render.ps1` 要后台执行再轮询 `.renderlog.txt`；Word COM 是唯一串行资源（`.pdf.lock` 跨科目排队）；导出结果只认日志里的 `TIMEOUT|`，不认退出码。
+导出 PDF 的完整链条（`--prepare` → 执行 `render.ps1` → `--render` → `--clean`）、过程目录隔离、三把锁、看门狗与 Word / PowerPoint 的 COM 纪律，全部在 `references/render.md`——**只在导出、页检、并发构建时读**。必须先知道的三条：`render.ps1` 要后台执行再轮询 `.renderlog.txt`；Word COM 是唯一串行资源（`.pdf.lock` 跨科目排队）；导出结果只认日志里的 `TIMEOUT|`，不认退出码。另有一条硬提醒：**导出期间不要让用户双击打开 Word 文档**——Windows 的 DDE 会把文件交给正在导出的实例，收尾时可能一起关掉；脚本会检测并拒绝退出（`QUIT SKIPPED`），但不该靠这层兜底。
 
 ## 阶段索引
 

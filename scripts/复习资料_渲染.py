@@ -224,7 +224,7 @@ def clean(name=None):
     out = _run_dir(name)
     if os.path.abspath(out) == os.path.abspath(BASE):
         # 老式平铺目录：只删过程文件，目录本身留着（它可能是别人的父目录）
-        for f in (LIST_NAME, MAP_NAME, 'render.ps1', '.renderlog.txt'):
+        for f in (LIST_NAME, MAP_NAME, 'render.ps1', '.renderlog.txt', '.renderpid.txt'):
             p = os.path.join(out, f)
             if os.path.exists(p):
                 os.remove(p)

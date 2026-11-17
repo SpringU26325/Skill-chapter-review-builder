@@ -5,13 +5,12 @@
 本脚本把「页数 / 空页」这类只读检查统一收口：
   - 走全局 .pdf.lock，与转 PDF 串行（Word 是单实例资源）；
   - 只做 ComputeStatistics / GoTo 读操作，**绝不调 ExportAsFixedFormat / SaveAs2**；
-  - 优先复用已打开的 Word 实例（GetActiveObject），只 Close 自己打开的文档；
-    自己新建的实例才 Quit，不碰别人的文档。
-  - **不隐藏用户窗口**：Visible=0 只对本脚本新建的实例设——11-16 对用户实例设过一次，
-    他的窗口整个消失，看起来就是「Word 被关了」；
-  - **用户已打开的文档一律不关**：`Documents.Open` 对已开的文档返回同一个对象，
-    后面无条件 `Close(0)` 关掉的就是他那一份，未保存的改动直接丢；
-  - **测完还原活动文档与光标**：`GoTo` 会挪走光标，不还原等于擅自动了他看的位置。
+  - **一律新建独立实例**，不复用用户已打开的 Word。借用时 `Visible=$false`、`Close(0)`、
+    `GoTo` 全落在用户那个进程上——11-16 把他正看的文档关掉，就是这么发生的；
+  - 实例隐藏、文档只读打开，读完逐个关闭再 `Quit`；用户窗口不在这个进程里，天然不受影响；
+  - **超时不按进程名杀 Word**：只把本次拉起的 PID 落盘，超时后报告 PID（标注「疑似」），
+    结束与否由人决定；同一批超时后不再继续后续批次，避免堆出多个看不见的实例。
+  - **重复参数去重**：同一份 docx 传两次会二次 `Close(0)` 抛错，整批 FAIL。
 
 用法：python 复习资料_页检.py <docx> [docx2 ...]
 输出：每份文件的页数、每页字符数（<40 标记为疑似空页）。退出码：0 正常 / 2 有疑似空页 / 1 COM 失败。
@@ -29,6 +28,7 @@ import _env
 ROOT = None
 LOCK_DIR = None
 LIST = None                                     # 每进程一份清单，见 _bind_paths()
+PIDFILE = None                                  # 疑似本次拉起的 WINWORD PID，超时后只报告不杀
 LOCK = None
 
 
@@ -52,13 +52,14 @@ def _root_from_docx(paths):
 
 def _bind_paths(paths):
     """确定工作区 → 锁目录 → 本进程清单名。清单带 pid：并行页检不会互相删清单。"""
-    global ROOT, LOCK_DIR, LIST, LOCK
+    global ROOT, LOCK_DIR, LIST, PIDFILE, LOCK
     ROOT = _env.find_root() or _root_from_docx(paths)
     LOCK_DIR = _env.lock_dir(ROOT)
     if not ROOT:
         print('WARN 定位不到工作区，锁目录退到 %s；与工作区内的会话不是同一把锁，'
               '可能同时开第二个 Word。建议在复习资料工作区里执行。' % LOCK_DIR)
     LIST = os.path.join(LOCK_DIR, '.页检清单.%d.txt' % os.getpid())
+    PIDFILE = os.path.join(LOCK_DIR, '.页检实例.%d.txt' % os.getpid())
     LOCK = os.path.join(LOCK_DIR, '.pdf.lock')
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -89,22 +90,29 @@ def _file_lock(path, timeout=900, what='Word 只读页检'):
 
 PS_TEMPLATE = (
     "$ErrorActionPreference='Stop';"
-    "$own=$false;$prevDoc='';$prevSel=0;"
-    "try{$w=[Runtime.InteropServices.Marshal]::GetActiveObject('Word.Application')}"
-    "catch{$w=New-Object -ComObject Word.Application;$own=$true};"
-    # 只隐藏自己起的实例。对用户正在用的实例设 Visible=0，会把他的窗口整个藏掉，
-    # 看起来就是「Word 被关了」——11-16 真实踩过。
-    "if($own){$w.Visible=$false};$w.DisplayAlerts=0;"
-    # 记住用户当前看的文档与光标位置，测完原样还回去
-    "if(-not $own){try{$prevDoc=$w.ActiveDocument.FullName;$prevSel=$w.Selection.Start}catch{}};"
+    # 快照只为识别「本次新起的实例」；快照紧贴 New-Object，窗口越窄越不容易把
+    # 用户此刻手动开的 Word 算进来。它不是杀进程的依据。
+    "$pre=@(Get-Process WINWORD -ErrorAction SilentlyContinue|ForEach-Object{$_.Id});"
+    "$w=$null;"
     "try{"
-    # 先记下已经打开的文档：Documents.Open 对已开的文档返回同一个对象，
-    # 后面若无条件 Close(0)，关掉的就是用户那份（他的未保存改动直接丢）。只关自己开的。
-    "$open=@{};foreach($od in @($w.Documents)){$open[$od.FullName]=$true};"
-    "$ps=Get-Content -LiteralPath '__LIST__' -Encoding UTF8;"
-    "foreach($p in $ps){"
+    # 一律新建实例。复用用户实例时，Visible/Close/GoTo 全作用在他正用的那个进程上
+    "$w=New-Object -ComObject Word.Application;"
+    "$w.Visible=$false;$w.DisplayAlerts=0;"
+    # 把本次新起的 PID 落盘：超时后 Python 只报告这些 PID，不按名字杀全部 WINWORD。
+    # 同时新起多个时取 StartTime 最早的那个——本次实例先于用户任何手动操作创建。
+    "$mine=@();for($k=0;$k -lt 10;$k++){"
+    "$new=@(Get-Process WINWORD -ErrorAction SilentlyContinue|"
+    "Where-Object{$pre -notcontains $_.Id});"
+    "if($new.Count -gt 0){$pick=$new[0];"
+    "try{$pick=@($new|Sort-Object StartTime)[0]}catch{};"
+    "$mine=@($pick.Id);break};"
+    "Start-Sleep -Milliseconds 300};"
+    "if($mine.Count -gt 0){"
+    "Set-Content -LiteralPath '__PIDFILE__' -Value ($mine -join ' ') -Encoding ASCII};"
+    "$lines=Get-Content -LiteralPath '__LIST__' -Encoding UTF8;"
+    "foreach($p in $lines){"
     "if(-not $p.Trim()){continue};"
-    "$full=[IO.Path]::GetFullPath($p);$had=$open.ContainsKey($full);"
+    "$full=[IO.Path]::GetFullPath($p);"
     "$d=$w.Documents.Open($full,$false,$true);"        # ReadOnly
     "$n=$d.ComputeStatistics(2);"                      # wdStatisticPages
     "Write-Output ('DOC|'+$n);"
@@ -113,16 +121,14 @@ PS_TEMPLATE = (
     "if($i -lt $n){$e=$d.GoTo(1,1,$i+1).Start}else{$e=$d.Content.End};"
     "Write-Output ('PAGE|'+$i+'|'+($e-$s));"           # 页内字符数 = 下页起点 - 本页起点
     "};"
-    "if(-not $had){$d.Close(0)};"                       # wdDoNotSaveChanges，只关自己打开的
+    # 文档都是本实例打开的，直接关；用户那份在别的进程里，碰不到
+    "$d.Close(0);"
     "};"
-    "Write-Output 'ok'"
+    "Write-Output 'ok';"
     "}finally{"
-    # 还原用户的活动文档与光标：GoTo 会把光标挪走，不还原等于擅自动了他的位置
-    "if($prevDoc){foreach($od in @($w.Documents)){"
-    "if($od.FullName -eq $prevDoc){$od.Activate();$w.Selection.SetRange($prevSel,$prevSel);break}}}"
-    "if($own){$w.Quit()};"                              # 只关自己起的实例
-    "[Runtime.InteropServices.Marshal]::ReleaseComObject($w)|Out-Null;"
-    "[GC]::Collect();[GC]::WaitForPendingFinalizers()"
+    "if($w){try{$w.Quit()}catch{};"
+    "try{[Runtime.InteropServices.Marshal]::ReleaseComObject($w)|Out-Null}catch{};"
+    "[GC]::Collect();[GC]::WaitForPendingFinalizers()}"
     "}"
 )
 
@@ -130,32 +136,40 @@ PS_TEMPLATE = (
 CHUNK = 8          # 每次 PowerShell 调用最多查几份；46 份一次跑会顶到 180s 看门狗
 
 
-def _kill_stray_word():
-    """只清无主窗口的 Word（自动化起的那种），用户自己开着的窗口留着。"""
-    ps = ("Get-Process WINWORD -ErrorAction SilentlyContinue | "
-          "Where-Object { $_.MainWindowHandle -eq 0 } | Stop-Process -Force "
-          "-ErrorAction SilentlyContinue")
+def _read_pids():
+    """读疑似本次拉起的 WINWORD PID。只用于超时报告，不拿来杀进程。"""
     try:
-        subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
-                       capture_output=True, timeout=60)
-    except Exception:
-        pass
+        with open(PIDFILE, encoding='ascii') as f:
+            return [x for x in f.read().split() if x.isdigit()]
+    except OSError:
+        return []
 
 
 def _run_chunk(paths):
-    """返回 (rows, err)。rows = [(path, pages, [每页字符数…])]。"""
+    """返回 (rows, err, hang)。rows = [(path, pages, [每页字符数…])]。"""
     with open(LIST, 'w', encoding='utf-8') as f:
         f.write('\n'.join(os.path.abspath(p) for p in paths))
-    ps = PS_TEMPLATE.replace('__LIST__', LIST)  # PS 单引号串内反斜杠是字面量，无需转义
+    try:
+        os.remove(PIDFILE)                  # 上一批的 PID 不能带到这一批
+    except OSError:
+        pass
+    ps = (PS_TEMPLATE
+          .replace('__LIST__', LIST)        # PS 单引号串内反斜杠是字面量，无需转义
+          .replace('__PIDFILE__', PIDFILE))
     try:
         r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
                            capture_output=True, text=True, encoding='utf-8',
                            errors='replace', timeout=180)
     except subprocess.TimeoutExpired:
-        _kill_stray_word()
-        return [], '180s 内没跑完（这批 %d 份）；已清理残留的无窗口 Word' % len(paths)
+        # 不按进程名杀 Word：只报出疑似本次拉起的 PID，结束与否交给用户
+        stray = _read_pids()
+        msg = '180s 内没跑完（这批 %d 份）' % len(paths)
+        if stray:
+            msg += ('；疑似本次拉起的 Word 未退出，PID %s（未自动结束；若期间你手动开过 Word，'
+                    '也会被算进来）' % ','.join(stray))
+        return [], msg, True
     if 'ok' not in (r.stdout or ''):
-        return [], ('PowerShell 未回 ok：' + (r.stderr or r.stdout or '')[:200])
+        return [], ('PowerShell 未回 ok：' + (r.stderr or r.stdout or '')[:200]), False
     rows, cur = [], None
     for line in (r.stdout or '').splitlines():
         parts = line.split('|')
@@ -167,7 +181,7 @@ def _run_chunk(paths):
         elif parts[0] == 'ok':
             break
     # 按顺序补上路径：PowerShell 是顺序打开的
-    return [(paths[i], rows[i][1], rows[i][2]) for i in range(min(len(paths), len(rows)))], None
+    return [(paths[i], rows[i][1], rows[i][2]) for i in range(min(len(paths), len(rows)))], None, False
 
 
 def check(paths):
@@ -176,11 +190,20 @@ def check(paths):
     fails = []
     for i in range(0, len(paths), CHUNK):
         batch = paths[i:i + CHUNK]
-        rows, err = _run_chunk(batch)
+        rows, err, hang = _run_chunk(batch)
         if err:
             for p in batch:
                 fails.append((p, err))
             print('FAIL %s：%s' % (os.path.basename(batch[0]), err))
+            if hang:
+                # 超时说明有一个看不见的 Word 卡住了。继续跑后续批次只会再起新的实例，
+                # 把卡死实例越堆越多，所以这里直接停手，剩下的报未执行。
+                rest = paths[i + len(batch):]
+                for p in rest:
+                    fails.append((p, '前一批超时，未执行'))
+                if rest:
+                    print('STOP 前一批超时，剩余 %d 份未执行；先确认残留 Word 是否需要结束' % len(rest))
+                break
             continue
         for p, pages, lens in rows:
             done += 1
@@ -204,6 +227,17 @@ def main():
     if not args:
         print(__doc__)
         raise SystemExit(1)
+    # 去重：同一份 docx 传两次，第二次 Documents.Open 返回同一个对象，再 Close(0) 会抛错，
+    # 整批直接 FAIL。
+    seen, uniq = set(), []
+    for a in args:
+        k = os.path.normcase(os.path.abspath(a))
+        if k in seen:
+            print('SKIP 重复参数：%s' % a)
+            continue
+        seen.add(k)
+        uniq.append(a)
+    args = uniq
     _bind_paths(args)
     with _file_lock(LOCK):
         try:
@@ -211,10 +245,11 @@ def main():
         finally:
             # 必须在锁内删：锁外删会踩到下一个会话刚写进去的清单，
             # 对方的 PowerShell 读不到文件就整批 FAIL。
-            try:
-                os.remove(LIST)
-            except OSError:
-                pass
+            for p in (LIST, PIDFILE):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
     raise SystemExit(code)
 
 

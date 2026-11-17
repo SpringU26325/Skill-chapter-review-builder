@@ -6,6 +6,59 @@
 >
 > **本文件是纯文档，不参与执行**：其中出现的盘符路径仅用于陈述历史缺陷，`scripts\` 内的可执行代码不含任何盘符绝对路径（Office 安装位探测除外，那是读外部软件位置，不是写工作区路径）。机械扫「零绝对路径」时应只扫 `scripts\`。
 
+## 2.4.2 — 2026-11-17
+
+起因：2.3.1 修的是「借用户实例时别乱动」，借用本身没断；渲染侧看门狗超时仍按进程名 `Stop-Process WINWORD`。两条路都可能碰到用户正开着的 Word。
+
+改完初版做了一轮自查，查出三处硬伤（见「自查修正」），一并修在这版里。
+
+### 页检（`scripts/复习资料_页检.py`）
+
+- **改为自建隐藏实例**：删掉 `GetActiveObject` 分支，一律 `New-Object`，读完 `Quit`。用户那份文档在另一个进程里，`Visible`、`Close(0)`、`GoTo` 都作用不到它。
+- **删掉 `MainWindowHandle=0` 判残留**：该判据两头都可能错——自动化实例也可能有窗口，用户实例也可能暂时无窗口。改为开工前快照 PID，取 `StartTime` 最早的那个写进 `.页检实例.<pid>.txt`。
+- **超时不杀进程**：180 秒超时只报出**疑似**本次拉起的 PID（报告里写明：期间手动开的 Word 也可能被算进来），由人决定是否结束；`_kill_stray_word()` 整段删除。
+- **超时即中止剩余批次**：一批超时后不再起新实例，剩余文件报「未执行」。继续跑只会把看不见的卡死实例越堆越多。
+- **重复参数去重**：同一份 docx 传两次，第二次 `Close(0)` 会抛错，整批 FAIL。
+
+### 渲染（`scripts/render.ps1`）
+
+- **归属只认 `.renderpid.txt`**：`New-Object` 之后立刻把本次实例 PID 落盘，看门狗超时时才读、收尾也只清这个 PID。不再用「开工前快照的差集」判归属。
+- **拿不到 PID 就不杀**：只写 `WARN cannot prove ownership` 并列出疑似 PID。留孤儿比杀错窗口轻。
+- **判定前先等一下**：短超时下看门狗可能与 PID 落盘撞在同一瞬间，读不到文件会「杀 0 个」留下孤儿。改为最多重试 3 次（约 2 秒）。
+
+### 用户文档被 DDE 吞进渲染实例（实测后才暴露）
+
+- **现象**：用户按提示在导出期间双击自己的 docx，导出正常结束，但用户的 Word 进程和桌面锁文件一起消失，未保存内容丢失，系统日志里没有任何崩溃记录。
+- **根因**：Windows 打开 `.docx` 走 DDE，会交给**任意一个已运行的 Word 实例**，不新建进程。渲染实例成了接收者，用户文档被打开在它里面；收尾 `Quit()` 关的是整个应用，用户文档跟着消失；`DisplayAlerts=0` 让「是否保存」不弹，内容静默丢弃。实测日志：`AFTER_OPEN count=1`（进程数没变）、`DOCS_IN_RENDER_INSTANCE=1`、`AFTER_QUIT count=0`、`USER_DOC_SURVIVED=NO`。
+- **隐藏实例挡不住**：`Visible=$false` 下同样 `DDE_REUSED=YES`、`DOCS_IN_HIDDEN=1`。这条路已实测排除，别再试。
+- **修法**：`Documents.Open` 时登记 `$ownDocs`；`Quit()` 前遍历 `Documents`，发现不属于本次的文档就记 `FOREIGN DOC` / `QUIT SKIPPED` / `cleanup skipped`，把 `DisplayAlerts` 还原成 `-1`、`Visible=$true`，**不 Quit、不强杀**，实例留给用户保存关闭。每份之间若实例里还有别的文档，打一次 `FOREIGN DOC STAYS OPEN`。
+- **验证**：全自动复现（导出第 10 秒模拟双击）→ 9 份全部 OK、`QUIT SKIPPED`、结束后 `AFTER_COUNT=1`、`LOCK_EXISTS=True`，文档完好；同一脚本改造前 `USER_DOC_SURVIVED=NO`。正常路径（无外来文档）复测仍 `quit sent` + `WINWORD_LEFT=0`，无多余告警。安全网触发后再观察 40 秒，实例未自行退出，`DisplayAlerts` 已还原为 `-1`，保存时会正常弹提示。
+- **窗口不能藏、也不能最小化**：用户反馈「导出时那个 Word 窗口闪得太快，根本来不及打字」，查证是实例在逐份切换文档。试过 `WindowState=1` 最小化降低干扰——`ExportAsFixedFormat` 直接挂死，PDF 不产出，`CloseMainWindow()` 与 COM `Quit()` 均无效，最后只能强杀自己的实验实例。结论：渲染实例必须保持正常可见窗口，这条写进 `render.md`，并明确「导出期间不要在那个窗口操作」。
+
+### 自查修正（改完初版后发现）
+
+- **差集判据会误杀**：`$base` 是开工那一刻的快照，导出期间用户新开的 Word 不在里面，**正常收尾**（不只是超时）就会把它强杀——与「不碰用户 Word」正相反。改 PID 文件后此路封闭。
+- **判定与落盘的时间窗口**：`CRB_RENDER_TIMEOUT=2` 实测撞上过，日志 `own pid=unknown; killing 0`，随后留下孤儿 17084 并打开了 p1.docx。已按上面的重试修掉。
+- **PID 复用**：按 PID 杀之前核对 `ProcessName -eq 'WINWORD'`，结束宿主进程前比对 `StartTime.Ticks`。PID 会被回收，只凭数字可能杀掉别人的进程。
+- **重试会误杀刚恢复的导出**：那 2 秒里日志若继续推进，说明没真挂，改为重置计时继续等，不再一律开杀。
+- **残留会变成永久白名单**：差集法下上一轮漏杀的实例进入下一轮快照，从此不被清理。已写进 `render.md` 第七节，要求人工结束。
+- **旧副本仍在用全局杀**：`复习资料\_生产\_render\render.ps1` 是上一轮 `--prepare` 复制的快照（11-11 的版本，第 63 行还是 `killing WINWORD`），且清单指向已废弃的 `复习资料\_render\p1.docx`。已用 `--clean` 清掉；`render.md` 补上「改完 `render.ps1` 必须重新 `--prepare`」。
+- `--clean` 补删 `.renderpid.txt`，平铺目录里不再留上一轮的所有权文件。
+
+### 文档
+
+- `references/render.md`：COM 纪律第 1 条改为「自建实例，不复用」；看门狗改成 PID 文件语义、归属判定与重试、前提检查（不再要求 WINWORD 数为 0）、`~$` 锁文件处置、失败判读重写（进程退出后算不出差集，只看日志三处标记）。
+- `references/engine.md`：文件被占用时不再用 `GetActiveObject` 查 `Saved`，改为报给用户自己关，查持有者走 `_wholock.py`。
+- `README.md` 已知限制同步。
+
+### 验证
+
+- 页检（用户 13348「文档1」开着）：12 页 0 空页；重复参数被 `SKIP`；结束后只剩 13348，锁目录无 `.页检*` 残留。
+- 熔断 `CRB_RENDER_TIMEOUT=2`：日志 `instance pid=17848` → `TIMEOUT|log silent 2s; own pid=17848; killing 1` → `WINWORD_LEFT=0`，用户的 13348 全程存活。
+- 正常导出：`instance pid=20040`、`OK|p1.pdf|10.5s`、`WINWORD_LEFT=0`，无 `leftover PID`；成品 docx 时间戳未变（22:05 / 22:55，未被写回）。
+- `py_compile`、`Parser::ParseFile`（render.ps1 与页检生成的 PS 模板）均 0 错误。
+- **导出期间打开 Word（已实跑，两次人工 + 一次自动复现）**：第一次基线 0、用户中途双击，结束后进程与锁文件一起消失——不是被强杀，是被 DDE 吞进渲染实例后随 `Quit()` 关闭。加安全网后同一场景复现：9 份 OK、`FOREIGN DOC` + `QUIT SKIPPED`、结束后实例存活（`AFTER_COUNT=1`、`LOCK_EXISTS=True`），文档完好；正常路径仍 `quit sent` + `WINWORD_LEFT=0`。
+
 ## 2.4.1 — 2026-11-16
 
 起因：用户追问「无『对应题目』行的节不是强制自拟吗？没有就根本跳不过去，怎么会有跳回来的说法」。查下来是**引擎与规则脱节**，不是规则问题：`_index_item()` 只从附录区标签提取节号，正文里的题（`:::quiz 【自拟】…`、`- **【自拟】** …`）压根不进 `_qmap`。于是高数 3 上（30 道题、标签 `§1` 无小数点）、程序设计 1（22 道题、标签 `【课后习题 2】` 无节号）整册题目链接为 0；2.3.0 的回跳挂在这行上，就只能为无题的节单起一行——这才引出「要不要给无题节加回跳」的伪问题。

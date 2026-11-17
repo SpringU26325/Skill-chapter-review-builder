@@ -31,13 +31,52 @@
 
 ## 四、render.ps1 与看门狗
 
-`render.ps1` 自带熔断：日志 180 秒没有新增就记 `TIMEOUT|`、强杀 Word 让阻塞的 COM 立刻抛错，然后收尾退出（阈值可用 `CRB_RENDER_TIMEOUT` 临时调整；自测可压到 `3` 验证熔断路径）。脚本退出前会把本次新起却没退干净的 WINWORD 强杀（日志 `CLEANED leftover`、`leftover PID:`），**只杀自己拉起的实例**，不动用户开着的窗口。
+`render.ps1` 自带熔断：日志 180 秒没有新增就记 `TIMEOUT|`，只结束**本次实例自己的 PID**（`New-Object` 之后立刻写进同目录 `.renderpid.txt`），让阻塞的 COM 立刻抛错，然后收尾退出（阈值可用 `CRB_RENDER_TIMEOUT` 临时调整；自测可压到 `2` 验证熔断路径，日志写 `own pid=…; killing N`）。脚本退出前同样只清自己的 PID（日志 `CLEANED leftover`、`leftover PID:`），**不按进程名杀全部 WINWORD**。
+
+三道额外保险，改动时不要删：① 杀之前核对 `ProcessName -eq 'WINWORD'`（PID 可能已被回收，属于别人）；② 熔断前先重试读 PID 文件约 2 秒，读完再复查日志——这 2 秒里日志若推进，说明没真挂，继续等；③ 结束宿主进程前比对 `StartTime.Ticks`，避免 PID 复用时杀错进程。
+
+**归属只认 PID 文件，不认「开工前快照的差集」**。差集会把导出期间你自己新开的 Word 一并算成「本次实例」——正常导出收尾就会把它强杀。所以：`New-Object` 之前紧贴地再取一次快照（窗口越窄越好），`New-Object` 之后立刻把该实例 PID 落盘（新起多个时取 `StartTime` 最早的那个，本次实例先于任何手动操作创建）；看门狗超时时才去读这个文件，读不到先等约 2 秒再读一次（短超时下判定与落盘会撞在同一瞬间）；**仍读不到就不杀，只报**。代价是拿不到 PID 时会留一个孤儿，这比杀错窗口轻。
+
+`.renderpid.txt` 在每次开工前删除，防止上一轮的文件给这一轮授权。目录里还有上一轮的 `.renderlog.txt` 时不要拿它判读，`--prepare` 会先删旧日志。
+
+### DDE 会把用户文档吞进渲染实例（11-17 实测）
+
+导出期间用户在资源管理器里双击任意 `.docx`，Windows 走 DDE 把文件交给**已运行的 Word 实例**，不新建进程——渲染实例就是最近的接收者。随后脚本收尾 `Quit()` 关的是整个应用，用户文档跟着消失；而 `DisplayAlerts=0` 让「是否保存」的提示不弹，未保存内容**静默丢失**。
+
+实测证据（基线 0 个 Word）：
+
+```
+PRE_COUNT=0
+AFTER_NEW  count=1  ids=30448        ← 渲染实例
+AFTER_OPEN count=1  ids=30448        ← 用户双击，进程数没变（DDE 复用）
+DOCS_IN_RENDER_INSTANCE=1
+  DOC ...\crb_user_sim.docx          ← 用户文档在渲染实例里
+AFTER_QUIT count=0                   ← 一起被关掉
+USER_DOC_SURVIVED=NO
+```
+
+**隐藏或最小化都挡不住，而且会挂死**：把渲染实例设成 `Visible=$false` 再测，`DDE_REUSED=YES`、`DOCS_IN_HIDDEN=1`，照样被复用；设成最小化（`WindowState=1`）后 `ExportAsFixedFormat` 直接挂死——PDF 不产出，`CloseMainWindow()` 与 COM `Quit()` 都无效，只能强制结束进程。对应地，**渲染实例必须保持 `Visible=$true` 的正常窗口**，不要去「优化」观感。
+
+代价是导出期间那个 Word 窗口会每 3–5 秒关一份、开下一份，标题在 `p1.docx`、`p2.docx` 之间跳。**这个窗口不能用来工作**：手速再快也来不及落字，打开文档还会被 DDE 并进去。要告诉用户「这段时间别在那台 Word 上操作」，而不要试图让它安静。
+
+现方案的收尾逻辑（`render.ps1` 的 `finally`）：
+
+1. 逐份 `Documents.Open` 时把绝对路径登记进 `$ownDocs`；
+2. `Quit()` 之前遍历 `Documents`，凡不在 `$ownDocs` 里的都算外来文档；
+3. 有外来文档 → 记 `FOREIGN DOC|…` + `QUIT SKIPPED|…` + `cleanup skipped`，把 `DisplayAlerts` 还原成 `-1`、`Visible=$true`，**不 Quit、不强杀**，实例留给用户自己保存关闭；
+4. 没有外来文档 → 正常 `quit sent`。
+
+因此：渲染前要提醒用户**不要在导出期间双击 Word 文档**；跑完看到 `QUIT SKIPPED` 时，必须让用户手动关闭那个 Word 窗口，**绝不按进程名或 PID 去杀**——那正是他文档所在的进程。中间每份之间若检测到实例里还有别的文档，会打一次 `FOREIGN DOC STAYS OPEN|…`。
+
+**改完 `render.ps1` 必须重新 `--prepare`**：`--prepare` 会把它复制进各章的渲染目录（`$PSScriptRoot` 决定清单位置，必须同目录），已存在的目录里跑的是复制时的快照。11-17 就有一份 11-11 的旧副本留在 `_生产\_render\`，里面还是按进程名全杀的版本。
 
 一条硬约束：**清单必须在 `New-Object -ComObject Word.Application` 之前读取并转成 `[string]`**。改到实例创建之后再读，`ExportAsFixedFormat` 会永久阻塞且不报错。
 
 **不要往 `render.ps1` 的 `try/finally` 之后追加逻辑**。COM 抛错后 finally 之后的语句不会执行（11-11 连测两次：日志与 stdout 都收不到），收尾、判定、统计一律写在 finally 内。
 
-前提检查：执行前 `WINWORD` 进程数必须为 0、过程目录内无 `~$` 锁文件；有就先让用户点掉模态框，再优雅 `Close(0)` → `Quit()`，不要连刷。
+看门狗 `Stop-Process -Id $parent` 杀的是**运行脚本的那个 PowerShell 宿主进程**，不是脚本本身。这是有意的（只有这样才能把被 COM 卡死的调用方一起解掉），代价是在自己的交互式窗口里直接跑这个文件，熔断时窗口会跟着关闭。
+
+前提检查：过程目录内不能有 `~$` 锁文件，目标 docx 不能被别的实例占着。**不要求 `WINWORD` 数为 0**——脚本自建实例，用户开着 Word 也能跑；遇到模态框先让用户点掉，再优雅 `Close(0)` → `Quit()`，不要连刷。
 
 ## 五、Word COM 纪律（防「文档恢复」残留）
 
@@ -45,14 +84,14 @@
 
 手工调用 COM 必须成套做完：
 
-1. 优先 `GetActiveObject("Word.Application")` 复用实例；`Visible=$false`、`DisplayAlerts=0`、`Documents.Open(..., ReadOnly=$true)`。
+1. **自建实例，不复用**：`New-Object -ComObject Word.Application`，再设 `Visible=$false`、`DisplayAlerts=0`、`Documents.Open(..., ReadOnly=$true)`。`GetActiveObject` 借到的是用户正在用的那个进程，隐藏窗口、关文档、挪光标都会落在他身上。
 2. 收尾顺序固定：`$d.Close(0)` → `$w.Quit()` → `ReleaseComObject($d)` → `ReleaseComObject($w)` → `[GC]::Collect()`。**只 release `$w` 会留下僵尸 WINWORD 进程**，之后构建写 docx 会静默失败（时间戳不更新）。
 3. **默认禁止 `Stop-Process -Force` / `taskkill` 结束 WINWORD**。强杀或异常退出会让 Word 来不及清掉 `%APPDATA%\Microsoft\Word\*.asd` 自动恢复副本，并在 `HKCU\...\Word\Resiliency` 留下恢复项；用户下次开关 Word 就会弹出「文档恢复」任务窗格。恢复列表里是**过程版副本**，误点会把已交付的最终版覆盖回去。
-   **仅两处例外，且都已写进 `render.ps1`，不要在别处模仿**：① 日志 180 秒不动（看门狗判挂死）；② 脚本自身 `Quit()` 后 15 秒仍有本次拉起的实例（`$base` 之外的 PID，留着会撞下一次导出）。两处都只杀本次新起的实例、不碰用户自己开的 Word。
-4. 遇 `~$xxx.docx` 锁文件：先 `GetActiveObject` 查 `Saved`，`Saved=True` 才允许 `Close(0)`；`Saved=False` 停下交给用户。确属自己起的隐藏实例用 `$w.Quit()` 优雅退出，仍不退就报告用户，不强杀。
+   **仅两处例外，且都已写进 `render.ps1`，不要在别处模仿**：① 日志 180 秒不动（看门狗判挂死）；② 脚本自身 `Quit()` 后 15 秒仍残留（留着会撞下一次导出）。两处**只杀 `.renderpid.txt` 里记的那个 PID**——不按进程名、不按差集；拿不到 PID 时只报不杀。**页检脚本超时不属于例外**：它只报出疑似本次拉起的 PID，由人决定是否结束。
+4. 遇 `~$xxx.docx` 锁文件：**不要 `GetActiveObject` 去碰用户实例**。用 `scripts\_wholock.py <docx>` 查持有者；确认是本次自己拉起的隐藏实例才 `Quit()`，仍不退就报告用户，不强杀；持有者是用户就停下，请他保存并关闭。
 5. **交付前只读确认**：`Get-Process WINWORD` 无自己起的残留、`复习资料\<科目>\` 及其 `_成品\` 下无 `~$` 锁文件。若 Word 已弹出「文档恢复」询问，指导用户选 **「否，删除这些文件。我已保存了需要的文件」**——成品已落盘且四项硬指标通过，恢复副本是旧版；**不要手动去 AppData 删文件**，交给 Word 自己清。
 6. **预览进程可直接强杀**：预览面板会拉起文档预览引擎并**锁住 docx**，后果是构建脚本打印「正式文件被占用」并把结果写到源稿目录（**退出码 3，非 0**）。遇到预览进程占锁直接结束它（用户已授权）。查真实持有者用 `scripts\_wholock.py <docx>`（Restart Manager，直接打印 pid 与进程名），**不要靠猜**。`WINWORD` 仍按第 3 条禁止强杀。
-7. **COM 只读检查统一走页检脚本，不要手写 PowerShell COM**：页数、逐页字符数、空页筛查全在脚本里；它优先复用已开的 Word 实例、只关自己的文档、带全局锁。手工 COM 仍是例外通道，用完必须成套收尾。
+7. **COM 只读检查统一走页检脚本，不要手写 PowerShell COM**：页数、逐页字符数、空页筛查全在脚本里；它**自建隐藏实例**，不碰用户已开的 Word，读完全部关闭并 `Quit`，带全局锁。超时只报出**疑似**本次拉起的 PID（这 3 秒里手动开的 Word 也可能被算进来），不自动结束进程，并立即中止剩余批次——继续跑只会再起实例，把卡死实例越堆越多。手工 COM 仍是例外通道，用完必须成套收尾。
 
 ## 六、导出的三条前提（纠正「通道整体不可用」的旧误判）
 
@@ -66,7 +105,9 @@
 
 **只认日志，不认退出码**。超时同样打印 `FAIL|…远程过程调用失败` 并以 0 退出——与「只挂了一个文件」长得一样，`TIMEOUT|` 才是挂死的证据，出现即判本次导出失败、PDF 不完整。
 
-症状：出现 `~$xxx.docx` 锁文件且无 PDF 产出 = 挂在导出。先 `GetActiveObject` → `Quit()` 优雅退出再重试，**不要连刷**——每次超时留一个卡死实例，后续调用会连到坏实例，造成「越试越挂」的假象。
+症状：出现 `~$xxx.docx` 锁文件且无 PDF 产出 = 挂在导出。**进程退出后已经算不出「差集」**，判据只有三个：日志有没有 `TIMEOUT|`、`WINWORD_LEFT=` 后面的数、`leftover PID:` 这一行。`WINWORD_LEFT=unknown (own pid not identified)` 配上 `WARN cannot prove ownership` 表示这次没认出自己的实例，看到的那几个 PID 一个都没杀。有自己残留的 PID 就 `Quit()` 优雅退出再重试，**不要连刷**——每次超时留一个卡死实例，后续调用会连到坏实例，造成「越试越挂」的假象。上一轮漏杀的实例会进入下一轮的「开工前快照」，从此不再被自动清理，需要人工结束。
+
+另两种收尾结局要分清：`QUIT SKIPPED` + `cleanup skipped` 表示实例里有一份不是本次打开的文档（`FOREIGN DOC|…` 会给出路径），脚本**故意不退出**以保住它——这不是故障，让人去保存并关闭那个 Word 窗口即可，**不要杀进程**；只有 `quit sent` + `WINWORD_LEFT=0` 才是干净收尾。
 
 ## 八、PowerPoint COM
 

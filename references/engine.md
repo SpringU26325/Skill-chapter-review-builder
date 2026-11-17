@@ -70,7 +70,6 @@
 `PermissionError: [Errno 13]` 的处理：
 
 1. 先输出到源稿目录（引擎自动降级，退出码 3，**非 0**，不允许当作已交付）；
-2. 用 COM `GetActiveObject("Word.Application")` 查该文档的 `Saved` 属性；
-3. **只有 `Saved=True`（无未保存修改）** 才允许 `Close(0)` 后替换并重新打开；
-4. `Saved=False` 一律停下让用户自己关，**绝不强关有改动的文档**；
-5. 查真实持有者用 `scripts\_wholock.py <docx>`，不要靠猜。
+2. **不碰用户的 Word 实例**：不查 `Saved`、不代为 `Close`；把被占用的文件名报给用户，请他保存并关闭；
+3. 查真实持有者用 `scripts\_wholock.py <docx>`（Restart Manager，不走 COM），不要靠猜；
+4. 用户关闭后重跑；**绝不强关有改动的文档**，也不按进程名杀 Word。
