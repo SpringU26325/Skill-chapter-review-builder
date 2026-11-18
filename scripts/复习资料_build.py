@@ -538,6 +538,64 @@ def _bold_greek(el):
     return n
 
 
+# latex2mathml 把 \lim_{x\to0} 输出成 <msub><mo>lim</mo>…</mo></msub>，MML2OMML
+# 转成 m:sSub，底下的 run 没有任何样式——Word 对普通字母 run 默认按变量排，
+# lim 就成了斜体；m:sSub 又是「右侧下标」，极限落在右下角而不是正下方。
+# 算子名一律补 m:sty=p 排正体；极限类再把 m:sSub 改造成 m:limLow 压到下方
+# （11-18 用户定：极限放下面，行高不是问题——有极限的地方一般也有分式）。
+_FUNC_NAMES = ('lim', 'limsup', 'liminf', 'max', 'min', 'sup', 'inf', 'det', 'gcd',
+               'Pr', 'dim', 'ker', 'arg', 'deg', 'exp',
+               'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+               'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh',
+               'ln', 'log', 'lg')
+_LIMIT_NAMES = ('lim', 'limsup', 'liminf', 'max', 'min', 'sup', 'inf',
+                'det', 'gcd', 'Pr')
+
+
+def _run_text(r):
+    """取一个 m:r 的文本（可能被拆成多个 m:t）。"""
+    return ''.join(t.text or '' for t in r.iter('{%s}t' % NS_M))
+
+
+def _set_plain(r):
+    """给 run 打 m:sty=p，按正体排；m:rPr 必须是 m:r 的第一个子元素。"""
+    rPr = r.find('{%s}rPr' % NS_M)
+    if rPr is None:
+        rPr = etree.Element('{%s}rPr' % NS_M)
+        r.insert(0, rPr)
+    sty = rPr.find('{%s}sty' % NS_M)
+    if sty is None:
+        sty = etree.SubElement(rPr, '{%s}sty' % NS_M)
+    sty.set('{%s}val' % NS_M, 'p')
+
+
+def _fix_operators(el):
+    """算子名（sin、lim…）排正体，极限类的下标压到正下方。"""
+    n = 0
+    for r in el.iter('{%s}r' % NS_M):
+        if _run_text(r) in _FUNC_NAMES:
+            _set_plain(r)
+            n += 1
+    for s in list(el.iter('{%s}sSub' % NS_M)):
+        e = s.find('{%s}e' % NS_M)
+        sub = s.find('{%s}sub' % NS_M)
+        if e is None or sub is None:
+            continue
+        r = e.find('{%s}r' % NS_M)
+        if r is None or _run_text(r) not in _LIMIT_NAMES:
+            continue
+        low = etree.Element('{%s}limLow' % NS_M)
+        s.remove(e)
+        low.append(e)
+        lim = etree.SubElement(low, '{%s}lim' % NS_M)
+        for child in list(sub):
+            sub.remove(child)
+            lim.append(child)
+        s.getparent().replace(s, low)
+        n += 1
+    return n
+
+
 _W_RPR_AFTER = ('w:szCs', 'w:color', 'w:spacing', 'w:w', 'w:kern', 'w:position',
                 'w:highlight', 'w:u', 'w:effect', 'w:bdr', 'w:shd', 'w:fitText',
                 'w:vertAlign', 'w:rtl', 'w:cs', 'w:em', 'w:lang',
@@ -633,6 +691,7 @@ def add_math(p, tex, size=None):
         t.set(XML_SPACE, 'preserve')
     _force_bar(el)
     _fix_accents(el)
+    _fix_operators(el)
     _bold_greek(el)
     if not p.runs:
         # 段落里只有公式时，Word 会当成独立公式居中显示（表格单元格因此对不齐）；
