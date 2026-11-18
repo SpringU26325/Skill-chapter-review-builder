@@ -215,7 +215,7 @@ def scan(only=None, quiet=False, write=False):
     print('科目 %d 个，文件 %d 个（已排除 _成品/_生产/临时件）' % (nsub, total))
     if not nsub:
         print('\n[还没有材料] 工作区里没有科目目录：先让用户把主干与补充资料放进'
-              ' Ebooks\\ 或 复习资料\\<科目>\\，再跑本脚本 --write 登记。')
+              ' 复习资料\\<科目>\\（或在 _生产\\_配置.md 里登记位置），再跑本脚本 --write 登记。')
         print('空工作区先跑 复习资料_init.py 建骨架；此时「0 个」不代表盘点通过。')
 
     if unk:
