@@ -61,6 +61,10 @@ cambria = doc.count('Cambria Math')
 mts = re.findall(r'<m:t[^>]*>(.*?)</m:t>', doc, re.S)
 allmt = ''.join(mts)
 uni_math = sum(1 for ch in allmt if 0x1D400 <= ord(ch) <= 0x1D7FF)
+# 希腊小写粗体（U+1D6C2–U+1D6DA）是 `_bold_greek()` 的产物：Word 不认 m:sty=b/bi 的
+# 希腊字母，只能靠码位本身粗。其余数学字母码位仍应被 polish_math 还原成 ASCII + sty。
+greek_bold = sum(1 for ch in allmt if 0x1D6C2 <= ord(ch) <= 0x1D6DA)
+uni_math_bad = uni_math - greek_bold
 backslash = allmt.count('\\'); dollar = allmt.count('$')
 nbsp = allmt.count('\u00a0'); emsp = allmt.count('\u2003')
 mtext = doc.count('<m:mtext')
@@ -77,7 +81,10 @@ if ndraw != len(img_refs):
 if npict:
     print(f"[FAIL] pict/object {npict} 个：旧式图形或嵌入对象，一律不允许")
 print(f"m:r {mruns} 个；Cambria Math {cambria} 次（应≈m:r）")
-print(f"m:t 中 U+1D400–1D7FF 字符 {uni_math} 个（应为 0）")
+print(f"m:t 中 U+1D400–1D7FF 字符 {uni_math} 个"
+      f"（希腊粗体 {greek_bold} 个属预期，其余 {uni_math_bad} 个应为 0）")
+if uni_math_bad:
+    print(f"[FAIL] 非希腊粗体的数学字母码位 {uni_math_bad} 个：polish_math 应还原成 ASCII + m:sty")
 print(f"m:t 中反斜杠 {backslash}、美元符 {dollar}（应为 0）；m:mtext {mtext}（应为 0）")
 print(f"m:t 中 NBSP {nbsp}（应为 0）、EM SPACE {emsp}（\\qquad 正常产物，不计入违规）")
 print(f"结构计数：m:d {d}、m:m {mm}、m:nary {nary}、m:eqArr {doc.count('<m:eqArr')}")

@@ -443,6 +443,68 @@ def _force_bar(el):
     return n_bar
 
 
+# \dot / \ddot / \vec / \tilde 在 MathML 里是 <mover>，MML2OMML 却转成 m:limUpp
+# （上方极限位）——Word 把点顶到离字母很远的地方，实测 ≈ 一个行高。\hat 走的是
+# m:acc（正常）。这里把单字符的 limUpp 改写回 m:acc，并用组合字符（U+0307 等）
+# 而不是间距字符（U+02D9）。
+_ACC_MAP = {'\u02d9': '\u0307',      # ˙ -> 组合上点
+            '\u00a8': '\u0308',      # ¨ -> 组合分音符
+            '~': '\u0303',           # ~ -> 组合波浪
+            '\u2192': '\u20d7',      # → -> 组合右箭
+            '\u2190': '\u20d6'}      # ← -> 组合左箭
+
+
+def _fix_accents(el):
+    """把 limUpp 的重音改写为 m:acc，让 dot 重音贴在字母上。"""
+    n = 0
+    for up in list(el.iter('{%s}limUpp' % NS_M)):
+        lim = up.find('{%s}lim' % NS_M)
+        base = up.find('{%s}e' % NS_M)
+        if lim is None or base is None:
+            continue
+        txt = ''.join(t.text or '' for t in lim.iter('{%s}t' % NS_M))
+        if len(txt) != 1 or txt not in _ACC_MAP:
+            continue
+        parent = up.getparent()
+        acc = etree.SubElement(parent, '{%s}acc' % NS_M)
+        accPr = etree.SubElement(acc, '{%s}accPr' % NS_M)
+        chr_el = etree.SubElement(accPr, '{%s}chr' % NS_M)
+        chr_el.set('{%s}val' % NS_M, _ACC_MAP[txt])
+        acc.append(base)
+        parent.replace(up, acc)
+        n += 1
+    return n
+
+
+# \mathbf{希腊字母} 只给出 m:sty=b / bi，Word 对 U+03B1–U+03C9 不照办（实测
+# \boldsymbol{\omega} 渲染出来仍是细的）。数学粗体有独立码位（U+1D6C2–U+1D6DA），
+# 换成那个字符才真的粗。大写区有未分配码位、偏移不连续，只处理小写。
+_GREEK_LO, _GREEK_HI = 0x03B1, 0x03C9
+_GREEK_BOLD_OFF = 0x1D6C2 - 0x03B1
+
+
+def _bold_greek(el):
+    """m:sty=b/bi 的希腊小写换成数学粗体码位。"""
+    n = 0
+    for r in el.iter('{%s}r' % NS_M):
+        rPr = r.find('{%s}rPr' % NS_M)
+        if rPr is None:
+            continue
+        sty = rPr.find('{%s}sty' % NS_M)
+        if sty is None or sty.get('{%s}val' % NS_M) not in ('b', 'bi'):
+            continue
+        t = r.find('{%s}t' % NS_M)
+        if t is None or not t.text or len(t.text) != 1:
+            continue
+        ch = ord(t.text)
+        if not (_GREEK_LO <= ch <= _GREEK_HI):
+            continue
+        t.text = chr(ch + _GREEK_BOLD_OFF)
+        rPr.remove(sty)
+        n += 1
+    return n
+
+
 _W_RPR_AFTER = ('w:szCs', 'w:color', 'w:spacing', 'w:w', 'w:kern', 'w:position',
                 'w:highlight', 'w:u', 'w:effect', 'w:bdr', 'w:shd', 'w:fitText',
                 'w:vertAlign', 'w:rtl', 'w:cs', 'w:em', 'w:lang',
@@ -537,6 +599,8 @@ def add_math(p, tex, size=None):
     for t in el.iter('{%s}t' % NS_M):
         t.set(XML_SPACE, 'preserve')
     _force_bar(el)
+    _fix_accents(el)
+    _bold_greek(el)
     if not p.runs:
         # 段落里只有公式时，Word 会当成独立公式居中显示（表格单元格因此对不齐）；
         # 垫一个零宽字符把它压回行内，左对齐交给段落自身的 jc 决定。
@@ -1579,6 +1643,11 @@ def polish_math(doc):
             if cp == 0xA0:
                 ch = '\u2009'          # 数学模式下残留的 NBSP 换成 thin space，避免"伪换行"标记
             out = unicodedata.normalize('NFKC', ch) if 0x1D400 <= cp <= 0x1D7FF else ch
+            # 希腊小写的数学粗体码位（U+1D6C2–U+1D6DA）不能还原：Word 对
+            # m:sty=b/bi 的希腊字母不照办（实测 \boldsymbol{\omega} 仍是细的），
+            # 只有字形本身带粗才显示为粗。还原成 ω 再补 sty 等于把粗体丢了。
+            if 0x1D6C2 <= cp <= 0x1D6DA and sty in ('b', 'bi'):
+                out, sty = ch, None
             if groups and groups[-1][0] == sty:
                 groups[-1][1].append(out)
             else:

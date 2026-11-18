@@ -88,15 +88,6 @@ def _long_inline_eq(line):
     return any(len(c) >= 80 and '=' in c for _, _, c in _inline_spans(line))
 
 
-def _frac_in_math(line):
-    r"""结构块里会撑高单行的写法，只查 $…$ 内部：\frac/\dfrac、斜杠除法。
-    不加 $ 的纯文本 a/b 不走公式转换，不报。"""
-    for _, _, c in _inline_spans(line):
-        if re.search(r'\\(d)?frac\b', c) or '/' in c:
-            return True
-    return False
-
-
 TREE_LINE_RE = re.compile(r'^\s*[│├└]')
 
 
@@ -104,32 +95,34 @@ BARE_MARK_RE = re.compile(r'[A-Za-z][_^][A-Za-z0-9]')
 
 
 def _bare_math_in_tree(s):
-    """树块（本章脉络）里裸写的 x_y / x^2 不会渲染，只认 Unicode、$…$ 与 _{…}/^{…}。
+    """树块（本章脉络）里裸写的 x_y / x^2 不会渲染，只认 $…$ 与 _{…}/^{…}。
 
     11-15 实测：`f_u * u_x` 原样进 Word，整块脉络没有一条公式。
-    11-18 起首选 Unicode（`xᵢ`、`v²/R`）：树块用 `$…$` 会跳字体，且任何 `/` 都堆成
-    上下分式。`x_{y}` / `x^{2}` 已被 _code_marks 认得，不算裸写。
+    `x_{y}` / `x^{2}` 已被 _code_marks 认得，不算裸写；Unicode 下标（`xᵢ`）
+    是 11-18 之前的写法，旧稿沿用，新稿优先 `$x_{y}$`。
     只查"裸下/上标"这一种，`sum=a+b` 这类 C 代码不含 _ ^，不会误伤。
     """
     outside = re.sub(r'\$[^$\n]*\$', '', s)     # 先摘掉已经包好的公式
     if '$' in s:
         if BARE_MARK_RE.search(outside):
-            return [r'$…$ 外面还有裸写 x_y：并进公式，或改用 Unicode（xᵢ）']
+            return [r'$…$ 外面还有裸写 x_y：并进公式，或写成 x_{y}']
         return []
     if BARE_MARK_RE.search(outside):
-        return [r'树块里裸写 x_y 不会变下标，改用 Unicode（xᵢ）或 $x_{y}$']
+        return [r'树块里裸写 x_y 不会变下标，包成 $x_{y}$（Unicode xᵢ 也行，旧稿沿用）']
     return []
 
 
 def _tree_rule_hits(s):
-    """结构块（本章脉络）里会破坏行距节奏的写法。
+    """结构块（本章脉络）的写法检查。
 
-    树块现在支持 $…$，公式进树后行高会随内容变化；堆叠分式与 \\limits
-    都会把单行撑高，整块缩进节奏立刻不齐。
+    11-18 起树块公式改用 `$…$` + `\\dfrac`（横线分式、矢量加粗），行高允许不齐，
+    所以不再拦「分式撑高」；但一行只能放一个分式——并排两个会把该行抬到相邻行的
+    两倍高，那种参差就没法看了。
     """
     hits = []
-    if _frac_in_math(s):
-        hits.append(r'结构块 $…$ 里的分式会变堆叠、撑高该行：改用 Unicode 纯文本（v²/R），或移出树')
+    if any('/' in seg and '\\frac' not in seg
+           for seg in re.findall(r'\$([^$\n]+)\$', s)):
+        hits.append(r'树块里分式写 \dfrac（横线），斜杠会排成线性分式')
     if '\\limits' in s:
         hits.append(r'结构块里 \limits 会把上下限压到下方、撑高行距，去掉 \limits')
     hits.extend(_bare_math_in_tree(s))
@@ -533,6 +526,9 @@ def check_file(path):
                 continue
             if '连写 ≥3 个 ─' in msg and i not in tree_lines:
                 # 只对结构块生效：正文里的 ─ 是正常标点。
+                continue
+            if '长行内公式含 =' in msg and i in tree_lines:
+                # 树块的缩进已经限定了换行，长公式不会被 Word 折成两行。
                 continue
             if callable(pat):
                 hit = pat(line)
