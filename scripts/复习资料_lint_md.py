@@ -104,19 +104,20 @@ BARE_MARK_RE = re.compile(r'[A-Za-z][_^][A-Za-z0-9]')
 
 
 def _bare_math_in_tree(s):
-    """树块（本章脉络）里裸写的 x_y / x^2 不会渲染，只认 $…$ 与 _{…}/^{…}。
+    """树块（本章脉络）里裸写的 x_y / x^2 不会渲染，只认 Unicode、$…$ 与 _{…}/^{…}。
 
     11-15 实测：`f_u * u_x` 原样进 Word，整块脉络没有一条公式。
-    只查"裸下/上标"这一种，`sum=a+b` 这类 C 代码不含 _ ^，不会误伤；
-    `x_{y}` / `x^{2}` 已被 _code_marks 认得，不算裸写。
+    11-18 起首选 Unicode（`xᵢ`、`v²/R`）：树块用 `$…$` 会跳字体，且任何 `/` 都堆成
+    上下分式。`x_{y}` / `x^{2}` 已被 _code_marks 认得，不算裸写。
+    只查"裸下/上标"这一种，`sum=a+b` 这类 C 代码不含 _ ^，不会误伤。
     """
     outside = re.sub(r'\$[^$\n]*\$', '', s)     # 先摘掉已经包好的公式
     if '$' in s:
         if BARE_MARK_RE.search(outside):
-            return [r'$…$ 外面还有裸写 x_y：一并包进 $…$，或改成 x_{y}']
+            return [r'$…$ 外面还有裸写 x_y：并进公式，或改用 Unicode（xᵢ）']
         return []
     if BARE_MARK_RE.search(outside):
-        return [r'树块里裸写 x_y 不会变下标，包成 $x_y$（或写 x_{y}）']
+        return [r'树块里裸写 x_y 不会变下标，改用 Unicode（xᵢ）或 $x_{y}$']
     return []
 
 
@@ -128,7 +129,7 @@ def _tree_rule_hits(s):
     """
     hits = []
     if _frac_in_math(s):
-        hits.append(r'结构块 $…$ 里的分式会变堆叠、撑高该行：改成不加 $ 的纯文本 a/b，或移出树')
+        hits.append(r'结构块 $…$ 里的分式会变堆叠、撑高该行：改用 Unicode 纯文本（v²/R），或移出树')
     if '\\limits' in s:
         hits.append(r'结构块里 \limits 会把上下限压到下方、撑高行距，去掉 \limits')
     hits.extend(_bare_math_in_tree(s))
@@ -159,8 +160,10 @@ RULES = [
      _multi_dfrac),
     ('WARN', r'\\text{…} 超 4 字，整句移到公式外',
      re.compile(r'\\text\{([^{}]{5,})\}')),
-    ('WARN', r'U+2080 区下标字符出现在代码块/正文，写 v_1 或 v1',
+    ('WARN', r'U+2080 区下标字符出现在正文，写 $v_1$（树块内可用，见 md-dialect 第 6 节）',
      re.compile(r'[\u2080-\u209f\u2070-\u2079]')),
+    ('WARN', r'树块里连写 ≥3 个 ─，进 Word 会成一条突兀长横线，写 ── 即可',
+     re.compile(r'─{3,}')),
     ('WARN', r'长行内公式含 = 连等式，易被 Word 折断，拆短用文字连',
      _long_inline_eq),
 ]
@@ -524,6 +527,13 @@ def check_file(path):
             out.append('        改：:::code … :::（块内保留原缩进）')
             continue
         for level, msg, pat in RULES:
+            if 'U+2080' in msg and i in code_lines:
+                # 下标字符在 :::code 树块里是唯一能表达下标的纯文本手段（$…$ 在树里
+                # 会堆叠、字体也不统一），实测等宽与正文字体都正常显示；这条只管正文。
+                continue
+            if '连写 ≥3 个 ─' in msg and i not in tree_lines:
+                # 只对结构块生效：正文里的 ─ 是正常标点。
+                continue
             if callable(pat):
                 hit = pat(line)
             else:
