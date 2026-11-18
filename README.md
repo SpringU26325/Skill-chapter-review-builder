@@ -30,7 +30,7 @@
 
 链路：LaTeX → MathML → `MML2OMML.XSL` → OMML。
 
-`latex2mathml` 默认把 `1/2`、`x/2` 输出为斜杠分式（OMML 中 `m:type="lin"`），Word 显示为压扁的斜杠。引擎在出口统一改为上下堆叠（`bar`），`audit` 统计 `lin` 数量作为回归指标。
+`latex2mathml` 默认把 `1/2`、`x/2` 输出为斜杠分式（OMML 中 `m:type="lin"`），Word 显示为压扁的斜杠。引擎在出口把**真除法**统一改为上下堆叠（`bar`）；**单位**（`\mathrm{m/s}`）例外，保留 `lin`——它本来就该是 `m/s`，不该排成 m 压在 s 上。判据是分子分母是否全为正体，`audit` 对本册的 `lin` 逐条复核：全正体算单位（预期），出现斜体即报 `[FAIL]`。
 
 ## 插图
 

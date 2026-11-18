@@ -386,23 +386,61 @@ CODE_INLINE_RE = re.compile(r'(\$[^$\n]+?\$)')
 TREE_LINE_RE = re.compile(r'^\s*[│├└]')                 # 有树符就当结构块
 TREE_PREFIX_RE = re.compile(r'^([│ ]*)([├└]─[ \t]*)?')
 
-def _force_bar(el):
-    """把 m:type=lin 的分式改回 bar。
+def _run_upright(r):
+    rPr = r.find('{%s}rPr' % NS_M)
+    if rPr is None:
+        return False
+    sty = rPr.find('{%s}sty' % NS_M)
+    return sty is not None and sty.get('{%s}val' % NS_M) == 'p'
 
-    latex2mathml 会把 `1/2`、`1/n`、`x/2` 这类**斜杠除法**转成 MathML 分式，
-    MML2OMML 再标成 `lin`（线性分式）——Word 渲染成压扁的斜杠，不是上下堆叠。
-    复习资料要的是「分数线在中间、分子分母各一边」，所以一律提升为 bar。
+
+def _part_upright(part):
+    """分子或分母是否「全正体」——用来认单位，不靠字母白名单。
+
+    `\\mathrm{m/s}` 经 latex2mathml 出来带 mathvariant=normal，MML2OMML 标成
+    m:sty=p；真正的代数分式（`1/2`、`x/2`、`v/u`、`\\mathrm{P}/T`）没有这个标记。
+    上下标里的指数数字（s² 的 2）不带 sty，不算反例，跳过不看。
     """
-    n = 0
+    if part is None:
+        return False
+    runs, stack = [], [part]
+    while stack:
+        cur = stack.pop()
+        for ch in cur:
+            if not isinstance(ch.tag, str):
+                continue
+            ln = etree.QName(ch).localname
+            if ln == 'r':
+                runs.append(ch)
+            elif ln in ('sup', 'sub', 'fPr'):
+                continue
+            else:
+                stack.append(ch)
+    return bool(runs) and all(_run_upright(r) for r in runs)
+
+
+def _force_bar(el):
+    """lin 分式分两种：真除法提成 bar，单位斜杠保持 lin。
+
+    latex2mathml 会把 `1/2`、`x/2` 这类**斜杠除法**转成 MathML 分式，MML2OMML
+    标成 `lin`（线性分式）——Word 渲染成压扁的斜杠，不是上下堆叠，所以要提成 bar。
+    但单位 `\\mathrm{m/s}` 走的是同一条链路，它本来就该是斜杠形式（m/s，不是 m 压在
+    s 上）。用「分子分母是否全正体」区分：单位是正体，代数式是斜体。
+    """
+    n_bar = 0
     for f in el.iter('{%s}f' % NS_M):
         fPr = f.find('{%s}fPr' % NS_M)
         if fPr is None:
             continue
         ty = fPr.find('{%s}type' % NS_M)
-        if ty is not None and ty.get('{%s}val' % NS_M) == 'lin':
-            ty.set('{%s}val' % NS_M, 'bar')
-            n += 1
-    return n
+        if ty is None or ty.get('{%s}val' % NS_M) != 'lin':
+            continue
+        if _part_upright(f.find('{%s}num' % NS_M)) and \
+                _part_upright(f.find('{%s}den' % NS_M)):
+            continue            # 单位：保留 lin，斜杠形式
+        ty.set('{%s}val' % NS_M, 'bar')
+        n_bar += 1
+    return n_bar
 
 
 _W_RPR_AFTER = ('w:szCs', 'w:color', 'w:spacing', 'w:w', 'w:kern', 'w:position',

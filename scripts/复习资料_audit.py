@@ -82,13 +82,53 @@ print(f"m:t 中反斜杠 {backslash}、美元符 {dollar}（应为 0）；m:mtex
 print(f"m:t 中 NBSP {nbsp}（应为 0）、EM SPACE {emsp}（\\qquad 正常产物，不计入违规）")
 print(f"结构计数：m:d {d}、m:m {mm}、m:nary {nary}、m:eqArr {doc.count('<m:eqArr')}")
 
-# 分式类型：lin = Word 的「线性分式」，渲染成压扁的斜杠，不是上下堆叠。
-# 引擎在 add_math 里把 lin 统一提升为 bar，所以成品里 lin 必须为 0。
-ftypes = {}
-for body in re.findall(r'<m:f>(.*?)</m:f>', doc, re.S):
-    mt = re.search(r'<m:type m:val="(\w+)"', body)
-    k = mt.group(1) if mt else '缺 fPr(默认 bar)'
-    ftypes[k] = ftypes.get(k, 0) + 1
-lin = ftypes.get('lin', 0)
-summary = '、'.join(f'{k} {v}' for k, v in sorted(ftypes.items())) or '无分式'
-print(f"分式类型：{summary}（lin 应为 0；非 0 说明有分式被渲染成压扁的斜杠）")
+# 分式类型：lin = Word 的「线性分式」（渲染成斜杠），bar = 上下堆叠。
+# 引擎把**真除法**（`1/2`、`x/2`、`v/u`）提升为 bar，**单位**（`\mathrm{m/s}`）刻意
+# 保留 lin——单位本来就该写成 m/s，不该排成 m 压在 s 上。所以判据不是「lin 必须为 0」，
+# 而是对账：每个 lin 的分子分母必须全是正体（m:sty=p）；出现斜体的 lin 说明有真除法
+# 漏成了压扁的斜杠。
+MNS = '{%s}' % NS['m']
+_ftypes = {}
+_lin_bad = 0
+_lin_unit = 0
+
+
+def _all_upright(part):
+    """分子/分母里除上下标内的指数数字外，是否全是正体 run。"""
+    if part is None:
+        return False
+    runs, stack = [], [part]
+    while stack:
+        cur = stack.pop()
+        for ch in cur:
+            if not isinstance(ch.tag, str):
+                continue
+            ln = etree.QName(ch).localname
+            if ln == 'r':
+                runs.append(ch)
+            elif ln in ('sup', 'sub', 'fPr'):
+                continue
+            else:
+                stack.append(ch)
+    if not runs:
+        return False
+    for r in runs:
+        sty = r.find(MNS + 'rPr/' + MNS + 'sty')
+        if sty is None or sty.get(MNS + 'val') != 'p':
+            return False
+    return True
+
+
+for _f in etree.fromstring(doc.encode('utf-8')).iter(MNS + 'f'):
+    _ty = _f.find(MNS + 'fPr/' + MNS + 'type')
+    _val = _ty.get(MNS + 'val') if _ty is not None else '缺 fPr(默认 bar)'
+    _ftypes[_val] = _ftypes.get(_val, 0) + 1
+    if _val == 'lin':
+        if _all_upright(_f.find(MNS + 'num')) and _all_upright(_f.find(MNS + 'den')):
+            _lin_unit += 1
+        else:
+            _lin_bad += 1
+summary = '、'.join(f'{k} {v}' for k, v in sorted(_ftypes.items())) or '无分式'
+print(f"分式类型：{summary}（其中 lin 单位 {_lin_unit} 条，走 m/s 斜杠形式，属预期）")
+if _lin_bad:
+    print(f"[FAIL] {_lin_bad} 个 lin 分式的分子或分母含斜体：真除法被排成了压扁的斜杠")
