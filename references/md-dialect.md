@@ -80,6 +80,8 @@
 | 其他算子 | `$\sin x$`、`$\ln x$`、`$\log_{2}x$`、`$\max a_i$` 照写，引擎统一排正体 |
 | 增广矩阵 | 用 6 列 `bmatrix`，文字里注明"前 3 列是 $A$"——`array{ccc|ccc}` 的竖线会被转换器丢掉 |
 | 共轭上划线 | `\bar{z}`（**上划线只盖紧邻的一个字符**）；要盖住整组才写 `\bar{z_1z_2}` |
+| 线段 / 弦长标记 | `$\bar{BC}$`——`\bar` 会拉宽盖住整组；**不要 `\overline{BC}`**，它是破折号字形，线会从字母中间穿过 |
+| 绝对值 | `$\left|\left(\Delta\mathbf{v}\right)_n\right|$`——绝对值里的括号也写成 `\left(…\right)`；裸 `(` 会被当定界符分隔符，砸出一个空槽（成品里 `\|` 与内容之间空一块） |
 | 共轭转置 | `A^{H}`；不用 `\overline`——它生成带水平线字符的 `m:acc`，Word 可能把线压到字母中间 |
 
 **三条硬限制**：
@@ -192,7 +194,8 @@
 | `\bigr)'(N)` 求导记法 | 转换后 `m:r` 为 0 | `\left(f^{-1}\right)'(N)` |
 | `\big\vert` / `\Big\vert` 带上下标 | 漏成字面 `\vert` | 改代入求值写法 |
 | `\bar{z_j}`（上划线包住下标） | 线会盖到下标上，看着像 $z$ 和 $j$ 都带线 | `\bar{z}_j`；`\bar{z_1z_2}` 是"盖整组"的正当写法，别一起改 |
-| `\overline{z}` | 生成带水平线字符的 `m:acc`，Word 可能把线压到字母中间 | `\bar{z}` |
+| `\overline{z}`、`\overline{BC}` | `latex2mathml` 输出 `<mo>U+2015</mo>`（HORIZONTAL BAR 破折号字形），MML2OMML 又当重音字符塞进 `m:acc`——那个字形本就排在字高中部，Word 不会把它抬成上划线，成品是一道**穿过字母的删除线**（11-18 第 1 章下实测） | `\bar{z}`、`\bar{BC}`：走 `m:bar`，Word 自己画的线，位置正确、宽度跟内容 |
+| `|(\Delta\mathbf{v})_n|`（绝对值里夹裸括号） | latex2mathml 把 `_n` 挂在 `)` 上，MML2OMML 于是把 `(` 当定界符的**分隔符** `m:sepChr`，拆出两个参数槽、第一个是空的：成品里 `\|` 与内容之间空一块，Word 编辑态显示成虚线占位框 | 内层括号也写 `\left(\Delta\mathbf{v}\right)`，整串 `\left|\left(\Delta\mathbf{v}\right)_n\right|` |
 | `$[[1,0.2],[0,0.8]]$`（矩阵简写） | 引擎只认 `\begin{bmatrix}`。`[[ ]]` 被当普通字符平铺，成品是 `[1,0.2],[0,0.8]`；两个相邻矩阵还粘连成 `[0,0.8][0.2,1]`。构建与 audit 都不报 | 块级 `$$\begin{bmatrix}…\end{bmatrix}$$`，或改文字描述 |
 | `\underline{…}`（填空横线） | `latex2mathml` 一律输出 `munder`，引擎不支持，整段公式在成品里为空；不报错时只剩一句「$\mathbf{v}=$」 | 填空写在数学外，直接 `____` |
 

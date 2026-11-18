@@ -129,6 +129,28 @@ def _tree_rule_hits(s):
     return hits
 
 
+def _overline_in_math(line):
+    """公式里的 \\overline：横线是 U+2015 破折号字形，会从字母中间穿过去。
+
+    latex2mathml 把 \\overline{BC} 转成 <mo>U+2015</mo>，MML2OMML 当重音字符塞进
+    m:acc；但那个字形本身排在字高中部，Word 不会把它抬成上划线——出来就是一道
+    删除线。\\bar 走 m:bar（Word 自己画的线），才是真上划线。
+    """
+    return bool(re.search(r'\\overline\s*\{', line))
+
+
+def _abs_with_paren(line):
+    """公式里的 |( ：裸括号会被当定界符的「分隔符」，砸出一个空槽。
+
+    |(\\Delta\\mathbf{v})_n| 里 latex2mathml 把 _n 挂在 ) 上，MML2OMML 于是把
+    ( 当成 m:sepChr，拆出两个参数槽、第一个是空的——成品里 | 与内容之间空一块，
+    Word 编辑态显示成虚线占位框。内层括号写成 \\left( … \\right) 即可。
+    """
+    segs = [c for _, _, c in _inline_spans(line)]
+    segs += [m.group(1) for m in re.finditer(r'\$\$(.+?)\$\$', line)]
+    return any('|(' in seg for seg in segs)
+
+
 # (级别, 说明, 正则/判定函数)
 RULES = [
     ('ERROR', r'表格行内公式里出现裸 |（行内公式外的列分隔符不算），改 \vert',
@@ -147,6 +169,10 @@ RULES = [
      _begin_in_inline_math),
     ('ERROR', r'::: 容器未闭合或多余 :::',
      re.compile(r'^\s*:::\s*$')),  # 计数型规则，特殊处理见下
+    ('ERROR', r'\\overline{…} 生成的是破折号字形，线会从字母中间穿过，改 \\bar{…}',
+     _overline_in_math),
+    ('ERROR', r'公式里 |( 没写 \left(\right)：裸括号被当分隔符，会砸出空槽（成品里 | 与内容空一块）',
+     _abs_with_paren),
     ('WARN', r'\sqrt{单符号^{…}} 上标会跑到根号外，改写（如 \sqrt{x\cdot x}）',
      re.compile(r'\\sqrt\{[A-Za-z\\]\^\{')),
     ('WARN', r'一行里 ≥2 个行内 \dfrac，各占一份行高，提到块级或拆行',
