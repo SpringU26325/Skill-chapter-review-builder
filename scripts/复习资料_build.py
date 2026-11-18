@@ -453,9 +453,29 @@ _ACC_MAP = {'\u02d9': '\u0307',      # ˙ -> 组合上点
             '\u2192': '\u20d7',      # → -> 组合右箭
             '\u2190': '\u20d6'}      # ← -> 组合左箭
 
+# 窄重音（点、双点）。叠加重音（\dot{\hat r}）时 Word 会给第二个重音再留一个完整
+# 重音槽——点坐在帽顶上还要空出 ≈1 pt，9 pt 正文里看着就是「飘」。Word 自己排
+# \hat{\dot r}（窄的在内、宽的外层）是贴的：帽的两臂正好把点围住，点还贴着字母。
+# 所以叠加重音一律把窄的换到里层，与 \hat{\dot r} 同形；读者看到的仍是「帽 + 点」，
+# 数学含义不变。
+_NARROW_ACC = ('\u02d9', '\u00a8')
+
+
+def _acc_el(chrval, base):
+    """造一个 m:acc，base 是现成的 m:e（被搬进新节点）。"""
+    acc = etree.Element('{%s}acc' % NS_M)
+    accPr = etree.SubElement(acc, '{%s}accPr' % NS_M)
+    chr_el = etree.SubElement(accPr, '{%s}chr' % NS_M)
+    chr_el.set('{%s}val' % NS_M, chrval)
+    acc.append(base)
+    return acc
+
 
 def _fix_accents(el):
-    """把 limUpp 的重音改写为 m:acc，让 dot 重音贴在字母上。"""
+    """把 limUpp 的重音改写为 m:acc，让重音贴在字母上。
+
+    叠加重音按「窄内宽外」重排：\\dot{\\hat r} 输出成帽在外、点在内。
+    """
     n = 0
     for up in list(el.iter('{%s}limUpp' % NS_M)):
         lim = up.find('{%s}lim' % NS_M)
@@ -466,11 +486,24 @@ def _fix_accents(el):
         if len(txt) != 1 or txt not in _ACC_MAP:
             continue
         parent = up.getparent()
-        acc = etree.SubElement(parent, '{%s}acc' % NS_M)
-        accPr = etree.SubElement(acc, '{%s}accPr' % NS_M)
-        chr_el = etree.SubElement(accPr, '{%s}chr' % NS_M)
-        chr_el.set('{%s}val' % NS_M, _ACC_MAP[txt])
-        acc.append(base)
+        acc = _acc_el(_ACC_MAP[txt], base)
+        inner = None
+        if txt in _NARROW_ACC and len(base) == 1:
+            inner = base.find('{%s}acc' % NS_M)
+        inner_e = inner.find('{%s}e' % NS_M) if inner is not None else None
+        if inner_e is not None and len(inner_e):
+            # 我们的点比里层那个宽重音更窄：点进里层，宽重音留在外层
+            letter = inner_e[0]
+            inner_e.remove(letter)
+            # 原来的 m:e 里装着外层那个 acc，不能直接搬；换成只装字母的新 m:e
+            old_e = acc.find('{%s}e' % NS_M)
+            acc.remove(old_e)
+            new_e = etree.SubElement(acc, '{%s}e' % NS_M)
+            new_e.append(letter)
+            inner_e.append(acc)
+            parent.replace(up, inner)
+            n += 1
+            continue
         parent.replace(up, acc)
         n += 1
     return n

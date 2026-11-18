@@ -19,6 +19,7 @@
 | 斜杠除法变成压扁的斜杠分式（`1/2` 渲染成 1⁄2） | `add_math()` 里 `_force_bar()`：把 `m:type=lin` 改写 `bar`，真除法全篇上下堆叠；**单位除外**——分子分母的 run 全是正体（`m:sty=p`）时判为单位，保留 `lin`（`m/s` 不会被排成 m 压在 s 上） |
 | 结构块里公式比周围文字大一圈（OMML 默认继承 10.5pt） | `_shrink_omml()` 把该段 `m:r` 的 `w:sz/szCs` 压到行字号；`polish_math()` 重建 run 时**带上传入的 sz**，否则字号被打回默认 |
 | `\dot r`、`\ddot r`、`\vec r`、`\tilde r` 的点/箭头飘到字母上方老远 | MML2OMML 把 `<mover>` 转成 `m:limUpp`（上方极限位）而不是 `m:acc`。`add_math()` 里 `_fix_accents()` 把它改回 `m:acc`，`m:chr` 用组合字符（U+0307 / U+0308 / U+0303 / U+20D7），不是间距字符 U+02D9。`\hat`、`\bar`、`\overline` 本来就是 `m:acc`，不受影响 |
+| 叠加重音（`\dot{\hat r}`）的点飘在帽顶上，中间空一大块 | Word 给每个重音都留一个完整重音槽，叠两层就空出 ≈1 pt；而它自己排 `\hat{\dot r}`（窄的在内、宽的外层）是贴的——帽的两臂正好把点围住。`_fix_accents()` 因此把窄重音（`\dot`、`\ddot`）换到里层，输出与 `\hat{\dot r}` 同形。**总高度不变**（Word 的重音槽是固定的），只是把空隙挪到帽外、让点贴着字母。9 pt 正文实测：改前点离帽 16 px@1200dpi，改后点离帽 9 px、帽压在点上 |
 | `\boldsymbol{\omega}`、`\mathbf{\omega}` 不粗 | Word 对 `m:sty=b/bi` 的希腊字母不照办（实测仍是细的），拉丁字母才照办。`_bold_greek()` 换成数学粗体码位（α–ω → U+1D6C2–U+1D6DA），`polish_math()` 的 NFKC 还原**必须跳过这一段**，否则字符被还原成 ω 又把粗体丢了 |
 | 树块里的 `│ ├ └ ─` 与中文/公式混排错位 | `_render_tree()`：剥掉行首树符，按「竖线数 + 分支符」算层级写 `w:ind`，一级节点加粗主色 |
 | 文末空页（文档以表格结尾，Word 隐式补段推到下页） | `trim_trailing_empty()`：删多余空段，显式补一个 1pt 段落 |
