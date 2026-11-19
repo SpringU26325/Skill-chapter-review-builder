@@ -674,6 +674,51 @@ def _split_func_run(r, names):
     return len(hits)
 
 
+def _fix_delims(el):
+    r"""m:d 里的空槽：把被 XSL 当成分隔符的那个字符拿回来当正文。
+
+    `\left(-\frac{a}{b}\right)` 的 MathML 本身没问题（fence + mo + mfrac），但
+    MML2OMML.XSL 会把 m:d 内非定界符的 mo 当成 sepChr，并按它把内容切成多个 m:e；
+    负号紧跟左括号时前半段就是空的，Word 于是画一个空槽方框（`( □ − a/b )`）。
+    修法：紧邻空 e 的那个 e 收下该字符，清空 sepChr，删掉空 e。
+    分隔符两侧都非空时（`\left(a-b\right)`）显示本来就对，不动。
+    """
+    n = 0
+    for d in el.iter('{%s}d' % NS_M):
+        pr = d.find('{%s}dPr' % NS_M)
+        if pr is None:
+            continue
+        sep = pr.find('{%s}sepChr' % NS_M)
+        ch = sep.get('{%s}val' % NS_M) if sep is not None else ''
+        if not ch:
+            continue
+        es = [x for x in d if x.tag == '{%s}e' % NS_M]
+        k = next((i for i, e in enumerate(es) if len(e) == 0), None)
+        if k is None:
+            continue
+        # 字符属于离空槽最近的那一侧内容：优先右边（负号在括号开头），没有就看左边
+        if k + 1 < len(es):
+            host, at_head = es[k + 1], True
+        elif k > 0:
+            host, at_head = es[k - 1], False
+        else:
+            continue
+        r = _mk('r')
+        t = _sub(r, 't')
+        t.text = ch
+        t.set(XML_SPACE, 'preserve')
+        if at_head:
+            host.insert(0, r)
+        else:
+            host.append(r)
+        sep.set('{%s}val' % NS_M, '')
+        for e in es:
+            if len(e) == 0:
+                d.remove(e)
+        n += 1
+    return n
+
+
 def _fix_operators(el):
     """算子名（sin、lim…）排正体，极限类的下标压到正下方。"""
     n = 0
@@ -805,6 +850,7 @@ def add_math(p, tex, size=None):
         t.set(XML_SPACE, 'preserve')
     _force_bar(el)
     _fix_accents(el)
+    _fix_delims(el)
     _fix_operators(el)
     _bold_greek(el)
     if not p.runs:

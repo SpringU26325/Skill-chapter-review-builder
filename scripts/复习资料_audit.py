@@ -126,7 +126,8 @@ def _all_upright(part):
     return True
 
 
-for _f in etree.fromstring(doc.encode('utf-8')).iter(MNS + 'f'):
+_root = etree.fromstring(doc.encode('utf-8'))
+for _f in _root.iter(MNS + 'f'):
     _ty = _f.find(MNS + 'fPr/' + MNS + 'type')
     _val = _ty.get(MNS + 'val') if _ty is not None else '缺 fPr(默认 bar)'
     _ftypes[_val] = _ftypes.get(_val, 0) + 1
@@ -139,3 +140,15 @@ summary = '、'.join(f'{k} {v}' for k, v in sorted(_ftypes.items())) or '无分�
 print(f"分式类型：{summary}（其中 lin 单位 {_lin_unit} 条，走 m/s 斜杠形式，属预期）")
 if _lin_bad:
     print(f"[FAIL] {_lin_bad} 个 lin 分式的分子或分母含斜体：真除法被排成了压扁的斜杠")
+
+# 空槽：XSL 把 m:d 内非定界符的 mo 当 sepChr，括号后紧跟负号时第一段 m:e 是空的，
+# Word 画成空槽方框。引擎的 _fix_delims 已把该字符挪回正文，这里查回归与存量。
+_empty_d = []
+for _dd in _root.iter(MNS + 'd'):
+    _pr = _dd.find(MNS + 'dPr')
+    _sp = _pr.find(MNS + 'sepChr') if _pr is not None else None
+    _ch = _sp.get(MNS + 'val') if _sp is not None else ''
+    if _ch and any(len(_e) == 0 for _e in _dd if _e.tag == MNS + 'e'):
+        _empty_d.append(_ch)
+if _empty_d:
+    print(f"[FAIL] {len(_empty_d)} 个 m:d 有空槽（分隔符 {''.join(sorted(set(_empty_d)))}）：_fix_delims 未生效")
