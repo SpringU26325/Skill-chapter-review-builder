@@ -581,15 +581,28 @@ def _is_var_start(c):
 
 
 def _pad_func_before_var(r):
-    r"""算子独占一个 run、变量在下一个 run 时，给算子末尾补细空格。"""
+    r"""算子独占一个 run、变量在下一个 run 时，给算子末尾补细空格。
+
+    下一个兄弟不一定是 run：\ln\sec^2 x 里的 sec 被包在 m:sSup 里（sec 是底数），
+    只看下一个 run 会漏，ln 与 sec² 粘成 lnsec²x——那是两个函数套着写，必须留缝。
+    """
     t = r.find('{%s}t' % NS_M)
     if t is None or not t.text or t.text.endswith('\u2009'):
         return
     nxt = r.getnext()
-    if nxt is None or nxt.tag != '{%s}r' % NS_M:
+    if nxt is None:
         return
-    nt = nxt.find('{%s}t' % NS_M)
-    if nt is not None and _is_var_start(nt.text[:1]):
+    if nxt.tag == '{%s}r' % NS_M:
+        nt = nxt.find('{%s}t' % NS_M)
+        ok = nt is not None and _is_var_start((nt.text or '')[:1])
+    else:
+        # 只认「后一个算子带指数」这一种：底数是算子名才补，普通变量/数字不管
+        ok = False
+        if nxt.tag in ('{%s}sSup' % NS_M, '{%s}sSub' % NS_M, '{%s}sSupSub' % NS_M):
+            e = nxt.find('{%s}e' % NS_M)
+            er = e.find('{%s}r' % NS_M) if e is not None else None
+            ok = er is not None and _run_text(er).rstrip('\u2009') in _FUNC_NAMES
+    if ok:
         t.text += '\u2009'
         t.set(XML_SPACE, 'preserve')
 
@@ -602,16 +615,17 @@ def _split_func_run(r, names):
     按最长名贪心切，'detA+detB' 切成 det/A+/det/B 四段。
     切完给「名后紧跟变量」的补一个 U+2009 细空格：源稿写 \det A，转换时那个
     空格被吞，不补会粘成 detA。名后是括号则不加（\det(A+B) 是标准写法）。
-    跳过两类 run：m:nor 是 \text 的正文（可能是 argument 这种英文词，切了
-    就毁），m:sty=p 是 \mathrm 内容或上一轮已切好的算子，都不该再动。
+    m:nor 是 \text 的正文（可能是 argument 这种英文词），一律跳过，切了就毁。
+    已带 m:sty=p 的 run 不能一律跳过：写成 \ln\sec x 时 latex2mathml 把两个名
+    并成一个 m:t='lnsec' 并直接标成正体，跳过就排成「lnsec x」，读起来像一个
+    不存在的函数名。所以正体 run 只在切不出第二段时才放过。
     """
     if r.getparent() is None:
         return 0
     if r.find('{%s}rPr/{%s}nor' % (NS_M, NS_M)) is not None:
         return 0
     sty = r.find('{%s}rPr/{%s}sty' % (NS_M, NS_M))
-    if sty is not None and sty.get('{%s}val' % NS_M) == 'p':
-        return 0
+    plain = sty is not None and sty.get('{%s}val' % NS_M) == 'p'
     txt = _run_text(r)
     if not txt:
         return 0
@@ -626,6 +640,8 @@ def _split_func_run(r, names):
             i += 1                          # 该位置不命中，右移一格再试
     if not hits:
         return 0
+    if plain and len(hits) < 2:
+        return 0                            # 已经正体的单名 run 不必重切
     segs, pos = [], 0                       # segs 是 (文本, 是否算子) 的切段
     for s, e in hits:
         if s > pos:
@@ -640,6 +656,7 @@ def _split_func_run(r, names):
         segs.append((txt[pos:], False))
     parent = r.getparent()
     idx = parent.index(r)
+    cut = []                                # 切出来的算子 run，插完再补间隙
     for k, (seg, is_func) in enumerate(segs):
         nr = copy.deepcopy(r)               # 复制保 m:rPr / w:rPr（字体字号不下滑）
         ts = nr.findall('{%s}t' % NS_M)
@@ -649,8 +666,11 @@ def _split_func_run(r, names):
             nr.remove(extra)
         if is_func:
             _set_plain(nr)
+            cut.append(nr)
         parent.insert(idx + k, nr)
     parent.remove(r)
+    for nr in cut:                          # 变量在下一个 run 时（'ln sec'+'x'）也要留间隙
+        _pad_func_before_var(nr)
     return len(hits)
 
 
