@@ -18,6 +18,9 @@ import re
 import sys
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+# 下面 _empty_delim_math 会惰性 import 引擎，引擎也会包一层 sys.stdout；旧 wrapper
+# 被 GC 时会关掉共享的 buffer（实测 "I/O operation on closed file"）。持有引用避免。
+_KEEP_STDOUT = [sys.stdout]
 
 
 def _inline_spans(line):
@@ -135,8 +138,9 @@ def _overline_in_math(line):
     latex2mathml 把 \\overline{BC} 转成 <mo>U+2015</mo>，MML2OMML 当重音字符塞进
     m:acc；但那个字形本身排在字高中部，Word 不会把它抬成上划线——出来就是一道
     删除线。\\bar 走 m:bar（Word 自己画的线），才是真上划线。
+    不带花括号的 \\overline D 同样走 m:acc（实测），不能只拦花括号形式。
     """
-    return bool(re.search(r'\\overline\s*\{', line))
+    return bool(re.search(r'\\overline\s*[\{A-Za-z]', line))
 
 
 def _abs_with_paren(line):
@@ -149,6 +153,37 @@ def _abs_with_paren(line):
     segs = [c for _, _, c in _inline_spans(line)]
     segs += [m.group(1) for m in re.finditer(r'\$\$(.+?)\$\$', line)]
     return any('|(' in seg for seg in segs)
+
+
+def _empty_delim_math(line):
+    """括号里只有运算符（[\\cdot]、(\\times)）会让公式整个丢失，用 OMML 复算判定。
+
+    latex2mathml 把 · 当成定界符的 sepChr，MML2OMML 于是拆出两个空槽、m:r 为 0；
+    成品里这两个括号之间空一块，内容全没了。正则只挑「[ 或 ( 开头、] 或 ) 结尾」
+    的行内公式当候选，真正判据是复算后的 m:r 数——[\\alpha] 这类正常公式也会被
+    挑出来，但复算 m:r 非 0，不会误报。
+    """
+    cands = [c for _, _, c in _inline_spans(line)
+             if c[:1] in '([' and c[-1:] in '])']
+    if not cands:
+        return False
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import 复习资料_build as _b
+        if sys.stdout not in _KEEP_STDOUT:
+            _KEEP_STDOUT.append(sys.stdout)  # 别让引擎那层 wrapper 被 GC 关掉 buffer
+    except Exception:
+        return False                    # 引擎不可用时不误报，交给 audit 兜底
+    for c in cands:
+        try:
+            el = _b.tex2omml(c)
+            if not list(el.iter('{%s}r' % _b.NS_M)):
+                return True
+        except Exception:
+            pass                        # 转换异常由别的规则与 audit 负责
+    return False
 
 
 # (级别, 说明, 正则/判定函数)
@@ -165,11 +200,13 @@ RULES = [
      re.compile(r"\\bigr\)\s*'")),
     ('ERROR', r'\\[Npt] 行距参数禁用，只写 \\，行距靠段落样式',
      re.compile(r'\\\\\[\d+(pt|ex|em|mm)\]')),
+    ('ERROR', r'括号内只有运算符、没有字母（[\cdot] 类），m:r 为 0、内容整个丢失，改 \lbrack…\rbrack',
+     _empty_delim_math),
     ('ERROR', r'行内 $…$ 里放 \begin{…}（矩阵/环境），提到块级公式',
      _begin_in_inline_math),
     ('ERROR', r'::: 容器未闭合或多余 :::',
      re.compile(r'^\s*:::\s*$')),  # 计数型规则，特殊处理见下
-    ('ERROR', r'\\overline{…} 生成的是破折号字形，线会从字母中间穿过，改 \\bar{…}',
+    ('ERROR', r'\\overline{…} / \\overline D 生成的是破折号字形，线会从字母中间穿过，改 \\bar',
      _overline_in_math),
     ('ERROR', r'公式里 |( 没写 \left(\right)：裸括号被当分隔符，会砸出空槽（成品里 | 与内容空一块）',
      _abs_with_paren),

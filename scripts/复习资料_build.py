@@ -569,13 +569,53 @@ def _set_plain(r):
     sty.set('{%s}val' % NS_M, 'p')
 
 
+def _split_leading_func(r, name):
+    r"""把一个 run 的 'detA' 拆成 'det'（正体）+ 'A'（原样）两个 run。
+
+    latex2mathml 把 \det A、\max a 这类合成单个 m:t='detA'，_FUNC_NAMES 精确
+    匹配不到，算子仍是斜体且和变量粘成一串（全库 det 254 处）。先 deepcopy
+    原 run 再改，两份 m:rPr / w:rPr 都保留；新 m:t 显式写 xml:space，否则
+    剩余文本前导空格会被 Word 吞掉。
+    """
+    parent = r.getparent()
+    ts = r.findall('{%s}t' % NS_M)
+    if parent is None or not ts:
+        return False
+    full = ''.join(t.text or '' for t in ts)
+    tail = copy.deepcopy(r)                 # 复制时还没有 m:sty=p，剩余保持原样
+    tt = tail.findall('{%s}t' % NS_M)
+    tt[0].text = full[len(name):]
+    tt[0].set(XML_SPACE, 'preserve')
+    for extra in tt[1:]:
+        tail.remove(extra)
+    ts[0].text = full[:len(name)]
+    ts[0].set(XML_SPACE, 'preserve')
+    for extra in ts[1:]:
+        r.remove(extra)
+    _set_plain(r)                           # 前缀算子排正体
+    parent.insert(parent.index(r) + 1, tail)
+    return True
+
+
 def _fix_operators(el):
     """算子名（sin、lim…）排正体，极限类的下标压到正下方。"""
     n = 0
-    for r in el.iter('{%s}r' % NS_M):
-        if _run_text(r) in _FUNC_NAMES:
+    # 整段精确命中优先；否则按算子名前缀拆 run。名字按长度降序，且整名命中
+    # 后直接 continue——否则 sinh 会被 sin 截成 sin+h、arcsin 被 arc 误切。
+    names = sorted(_FUNC_NAMES, key=len, reverse=True)
+    for r in list(el.iter('{%s}r' % NS_M)):
+        txt = _run_text(r)
+        if not txt:
+            continue
+        if txt in _FUNC_NAMES:
             _set_plain(r)
             n += 1
+            continue
+        for name in names:
+            if txt.startswith(name) and len(txt) > len(name):
+                if _split_leading_func(r, name):
+                    n += 1
+                break
     for s in list(el.iter('{%s}sSub' % NS_M)):
         e = s.find('{%s}e' % NS_M)
         sub = s.find('{%s}sub' % NS_M)
