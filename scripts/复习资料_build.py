@@ -569,39 +569,96 @@ def _set_plain(r):
     sty.set('{%s}val' % NS_M, 'p')
 
 
-def _split_leading_func(r, name):
-    r"""把一个 run 的 'detA' 拆成 'det'（正体）+ 'A'（原样）两个 run。
+def _is_var_start(c):
+    r"""判断字符是否为变量名开头（ASCII 字母数字 / 希腊 / 数学字母）。
 
-    latex2mathml 把 \det A、\max a 这类合成单个 m:t='detA'，_FUNC_NAMES 精确
-    匹配不到，算子仍是斜体且和变量粘成一串（全库 det 254 处）。先 deepcopy
-    原 run 再改，两份 m:rPr / w:rPr 都保留；新 m:t 显式写 xml:space，否则
-    剩余文本前导空格会被 Word 吞掉。
+    算子名后面碰到这种字符就要补细空格：'det'+'A' 排出来是 detA，'det'+'('
+    则是标准的 det(A)。数学字母区单列，因为 \mathbf A 出来是 U+1D400 而不是 'A'。
     """
+    return bool(c) and ((c.isascii() and c.isalnum())
+                        or '\u0370' <= c <= '\u03ff'
+                        or '\U0001d400' <= c <= '\U0001d7ff')
+
+
+def _pad_func_before_var(r):
+    r"""算子独占一个 run、变量在下一个 run 时，给算子末尾补细空格。"""
+    t = r.find('{%s}t' % NS_M)
+    if t is None or not t.text or t.text.endswith('\u2009'):
+        return
+    nxt = r.getnext()
+    if nxt is None or nxt.tag != '{%s}r' % NS_M:
+        return
+    nt = nxt.find('{%s}t' % NS_M)
+    if nt is not None and _is_var_start(nt.text[:1]):
+        t.text += '\u2009'
+        t.set(XML_SPACE, 'preserve')
+
+
+def _split_func_run(r, names):
+    r"""把 run 里出现的算子名逐段切成独立 run 并排正体，返回切出的个数。
+
+    latex2mathml 常把 \det A+\det B 整串合成单个 m:t='detA+detB'：算子名不
+    在 run 开头，按前缀切就漏（全库 128 处，线代第 5 章最密）。这里扫全文、
+    按最长名贪心切，'detA+detB' 切成 det/A+/det/B 四段。
+    切完给「名后紧跟变量」的补一个 U+2009 细空格：源稿写 \det A，转换时那个
+    空格被吞，不补会粘成 detA。名后是括号则不加（\det(A+B) 是标准写法）。
+    跳过两类 run：m:nor 是 \text 的正文（可能是 argument 这种英文词，切了
+    就毁），m:sty=p 是 \mathrm 内容或上一轮已切好的算子，都不该再动。
+    """
+    if r.getparent() is None:
+        return 0
+    if r.find('{%s}rPr/{%s}nor' % (NS_M, NS_M)) is not None:
+        return 0
+    sty = r.find('{%s}rPr/{%s}sty' % (NS_M, NS_M))
+    if sty is not None and sty.get('{%s}val' % NS_M) == 'p':
+        return 0
+    txt = _run_text(r)
+    if not txt:
+        return 0
+    hits, i = [], 0                         # hits 记每处算子名的 [起, 止)
+    while i < len(txt):
+        for name in names:                  # names 按长度降序，sinh 先于 sin
+            if txt.startswith(name, i):
+                hits.append((i, i + len(name)))
+                i += len(name)
+                break
+        else:
+            i += 1                          # 该位置不命中，右移一格再试
+    if not hits:
+        return 0
+    segs, pos = [], 0                       # segs 是 (文本, 是否算子) 的切段
+    for s, e in hits:
+        if s > pos:
+            segs.append((txt[pos:s], False))
+        body = txt[s:e]
+        nxt = txt[e:e + 1]
+        if _is_var_start(nxt):
+            body += '\u2009'                # 名后紧跟变量，补细空格防粘连
+        segs.append((body, True))
+        pos = e
+    if pos < len(txt):
+        segs.append((txt[pos:], False))
     parent = r.getparent()
-    ts = r.findall('{%s}t' % NS_M)
-    if parent is None or not ts:
-        return False
-    full = ''.join(t.text or '' for t in ts)
-    tail = copy.deepcopy(r)                 # 复制时还没有 m:sty=p，剩余保持原样
-    tt = tail.findall('{%s}t' % NS_M)
-    tt[0].text = full[len(name):]
-    tt[0].set(XML_SPACE, 'preserve')
-    for extra in tt[1:]:
-        tail.remove(extra)
-    ts[0].text = full[:len(name)]
-    ts[0].set(XML_SPACE, 'preserve')
-    for extra in ts[1:]:
-        r.remove(extra)
-    _set_plain(r)                           # 前缀算子排正体
-    parent.insert(parent.index(r) + 1, tail)
-    return True
+    idx = parent.index(r)
+    for k, (seg, is_func) in enumerate(segs):
+        nr = copy.deepcopy(r)               # 复制保 m:rPr / w:rPr（字体字号不下滑）
+        ts = nr.findall('{%s}t' % NS_M)
+        ts[0].text = seg
+        ts[0].set(XML_SPACE, 'preserve')    # 不写 preserve，Word 会吞首尾空白
+        for extra in ts[1:]:                # 原 run 可能拆成多个 m:t，只留第一个
+            nr.remove(extra)
+        if is_func:
+            _set_plain(nr)
+        parent.insert(idx + k, nr)
+    parent.remove(r)
+    return len(hits)
 
 
 def _fix_operators(el):
     """算子名（sin、lim…）排正体，极限类的下标压到正下方。"""
     n = 0
-    # 整段精确命中优先；否则按算子名前缀拆 run。名字按长度降序，且整名命中
-    # 后直接 continue——否则 sinh 会被 sin 截成 sin+h、arcsin 被 arc 误切。
+    # 整段精确命中直接排正体；其余交给 _split_func_run 扫全文切段——算子名
+    # 可能落在 run 中间（'=detA'、'detA+detB'），只认开头会漏一大半。
     names = sorted(_FUNC_NAMES, key=len, reverse=True)
     for r in list(el.iter('{%s}r' % NS_M)):
         txt = _run_text(r)
@@ -609,13 +666,10 @@ def _fix_operators(el):
             continue
         if txt in _FUNC_NAMES:
             _set_plain(r)
+            _pad_func_before_var(r)          # 变量在下一个 run 时也要留间隙
             n += 1
             continue
-        for name in names:
-            if txt.startswith(name) and len(txt) > len(name):
-                if _split_leading_func(r, name):
-                    n += 1
-                break
+        n += _split_func_run(r, names)
     for s in list(el.iter('{%s}sSub' % NS_M)):
         e = s.find('{%s}e' % NS_M)
         sub = s.find('{%s}sub' % NS_M)
