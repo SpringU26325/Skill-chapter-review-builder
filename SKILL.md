@@ -1,6 +1,6 @@
 ---
 name: chapter-review-builder
-version: 2.7.6
+version: 2.7.7
 description: 单章大学课程复习资料（.docx）的制作、返工与质检：从教材 PDF、课堂课件、笔记中提炼知识点、逐点配题、六项自检、页数与空页检查、关键页视觉验收，经自建引擎输出 LaTeX 原生公式的 Word。覆盖新做章节、上/下/中/拓展分册、题库与一页速查，以及已交付资料的重排、补题、核公式、查页数、重新导出。用户口语里说「提纲」「总结」「速查」「知识脉络」「章节结构」时也走这里。不适用于与复习资料无关的通用 Word 排版美化。
 agent_created: true
 ---
@@ -91,7 +91,7 @@ Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。解释器�
 # 只重建自己这一册（并行会话必用：科目关键字是子串匹配，会连坐别人的章）
 "<py>" "<skill>\scripts\复习资料_重建.py" --only 程序设计_第1章 --pdf
 
-# 交付前审计：四项硬指标 + 公式预检；退出码 0 才算过，退 1 表示有 [FAIL]
+# 交付前审计：md 公式预检 + docx 硬指标；退出码 0 才算过，退 1 表示有 [FAIL]
 "<py>" "<skill>\scripts\复习资料_audit.py" <md> <docx>
 
 # 原件盘点：未登记 / 未知后缀 / 疑似重复 / 登记失效（--write 把未登记行写进 _原件.md）
@@ -144,4 +144,4 @@ Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。解释器�
 
 1. 整个目录复制到任意宿主的 skills 目录即生效，**包内没有任何宿主目录名、没有机器绝对路径，也没有 `.git`**——版本库放在包外，复制时不会把历史带过去。
 2. 换机器只需装好上面四个 Python 依赖；解释器默认取工作区 `.venv`，也可用 `CRB_PYTHON` 指定。两处都没有时先问用户，不自建虚拟环境、也不装进系统解释器。
-3. `MML2OMML.XSL` 按三级探测：环境变量 `MML2OMML_XSL` → 包内 `assets\MML2OMML.XSL` → Office 安装路径。三级都找不到时报错并提示定位方式，不会静默失败。
+3. `MML2OMML.XSL` 按三级探测：环境变量 `MML2OMML_XSL` → 包内 `assets\MML2OMML.XSL`（**可选槽位，包里默认没有这个文件**；想锁死版本就从 Office 目录复制一份进去） → Office 安装路径。三级都找不到时报错并提示定位方式，不会静默失败。

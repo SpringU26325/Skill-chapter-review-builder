@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""交付前审计（各科通用）：md 公式预检 + docx 四项硬指标。
+"""交付前审计（各科通用）：md 公式预检 + docx 硬指标。
+
+会拦的五类（任一不达标退 1）：md 公式转换失败、图片数对不上或 pict/object 残留、
+数学字母码位、`lin` 分式含斜体、`m:d` 空槽。
+只报不拦：Cambria Math 次数、`m:t` 里的 `\\` 与 `$` 与 NBSP、结构计数。
 
 用法：python 复习资料_audit.py <md> <docx>
 科目专属的记号规则（行/列向量、符号表登记）在 <科目>_lint.py 里，不在这里。
@@ -59,7 +63,7 @@ print(f"公式总数 {len(display) + len(inline)}（独立 {len(display)} / 行�
 # 图片引用（code 块内已在上面的 body 里置空，不会误计）
 img_refs = re.findall(r'^!\[[^\]]*\]\(([^)\s]+)\)', body, re.M)
 
-# ---------- 2. docx 侧四项硬指标 ----------
+# ---------- 2. docx 侧硬指标 ----------
 z = zipfile.ZipFile(DOCX)
 names = z.namelist()
 media = [n for n in names if n.startswith('word/media/')]
@@ -168,4 +172,4 @@ if _empty_d:
 if _FAILS:
     print(f"审计不通过：{len(_FAILS)} 项不合格")
     sys.exit(1)
-print("审计通过：四项硬指标全过")
+print("审计通过：五类硬指标全过")
