@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""建骨架：只建约定目录、台账与配置，不碰素材、不建 .venv、不装库。
+"""建骨架：只建约定目录、台账、配置与踩坑清单，不碰素材、不建 .venv、不装库。
 
 用法：
     "<py>" "<skill>\\scripts\\复习资料_init.py" [科目 ...] [--root <工作区根>] [--dry]
@@ -10,7 +10,7 @@
 **也用于补建配置**：已有一堆源稿/成品、却没 `_生产\\_配置.md` 的老工作区同样跑这条命令——
 新建配置时会扫描既有源稿的 `@sub`，把教材版本与页码换算预填成候选行，供用户确认。
 
-幂等：台账、配置已存在时一律保留，绝不覆盖；`--dry` 只打印将要建什么。
+幂等：台账、配置、踩坑清单已存在时一律保留，绝不覆盖；`--dry` 只打印将要建什么。
 """
 import collections
 import io
@@ -162,12 +162,16 @@ def main():
     dirs += [os.path.join(ws, s) for s in subs]
     ledger = os.path.join(prod, '_台账.md')
     template = os.path.join(SKILL_DIR, 'assets', '台账_template.md')
-    # 台账与配置成对生成：缺一份就只剩半套骨架（配置说现状、台账说过往），
-    # 所以并进一张种子表，省掉两份模板各写一遍拷贝逻辑。
+    # 台账、配置、踩坑清单成套生成：缺一份就只剩半套骨架（配置说现状、台账说过往、
+    # 踩坑清单装着「改引擎前必读」的既成事实），所以并进一张种子表，省掉三份模板各写一遍拷贝逻辑。
     cfg = os.path.join(prod, '_配置.md')
+    pitfall = os.path.join(prod, '_踩坑清单.md')
     seeds = [
         (ledger, template),
         (cfg, os.path.join(SKILL_DIR, 'assets', '配置_template.md')),
+        # SKILL.md 把踩坑清单写成「改引擎、写公式、调 COM 前必读」，sources.md 又让人
+        # 「见踩坑清单顶部」找 WPS 禁令——新工作区不生成这个文件，这两处就是指向不存在的路。
+        (pitfall, os.path.join(SKILL_DIR, 'assets', '踩坑清单_template.md')),
     ]
     # 只在「配置还不存在」时扫描：已有配置说明主干定过了，不能拿推断值去覆盖
     rows = [] if os.path.isfile(cfg) else _infer_primary(os.path.join(prod, '_源稿'))
