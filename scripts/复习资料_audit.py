@@ -17,6 +17,16 @@ NS = {'m': 'http://schemas.openxmlformats.org/officeDocument/2006/math',
 
 MD, DOCX = sys.argv[1], sys.argv[2]
 
+# 退出码是硬闸：凡是 [FAIL] 都走 fail()，末尾据此退 0/1。
+# 历史教训：各指标只 print 不判定、退出码恒为 0，于是「audit 通过」只等于「脚本没崩」，
+# 台账里那些 audit 记录全是空承诺。不设「只警告」开关——要放行就改源稿，别放宽闸门。
+_FAILS = []
+
+
+def fail(msg):
+    _FAILS.append(msg)
+    print('[FAIL] ' + msg)
+
 # ---------- 1. md 侧公式预检 ----------
 src = open(MD, encoding='utf-8').read()
 lines, keep, incode = src.split('\n'), [], False
@@ -41,9 +51,9 @@ for kind, items in (('DISPLAY', display), ('INLINE', inline)):
             omml = T(etree.fromstring(mml.encode('utf-8')))
             s = etree.tostring(omml, encoding='unicode')
             if 'oMath' not in s or ('m:r' not in s and 'm:t' not in s):
-                print(f"[FAIL] {kind}: {t[:70]}"); bad += 1
+                fail(f"{kind}: {t[:70]}"); bad += 1
         except Exception as e:
-            print(f"[ERROR] {kind}: {t[:70]} -> {type(e).__name__}: {e}"); bad += 1
+            fail(f"{kind}: {t[:70]} -> {type(e).__name__}: {e}"); bad += 1
 print(f"公式总数 {len(display) + len(inline)}（独立 {len(display)} / 行内 {len(inline)}），转换失败 {bad}")
 
 # 图片引用（code 块内已在上面的 body 里置空，不会误计）
@@ -77,14 +87,14 @@ npict = doc.count('<w:pict') + doc.count('<w:object')
 print(f"图片：md 引用 {len(img_refs)} 张；media {len(media)} 个（同图复用会去重）"
       f"；drawing {ndraw} 个；pict/object {npict} 个（应为 0）")
 if ndraw != len(img_refs):
-    print(f"[FAIL] drawing {ndraw} ≠ md 图片引用 {len(img_refs)}：有图没插进去，或多插了")
+    fail(f"drawing {ndraw} ≠ md 图片引用 {len(img_refs)}：有图没插进去，或多插了")
 if npict:
-    print(f"[FAIL] pict/object {npict} 个：旧式图形或嵌入对象，一律不允许")
+    fail(f"pict/object {npict} 个：旧式图形或嵌入对象，一律不允许")
 print(f"m:r {mruns} 个；Cambria Math {cambria} 次（应≈m:r）")
 print(f"m:t 中 U+1D400–1D7FF 字符 {uni_math} 个"
       f"（希腊粗体 {greek_bold} 个属预期，其余 {uni_math_bad} 个应为 0）")
 if uni_math_bad:
-    print(f"[FAIL] 非希腊粗体的数学字母码位 {uni_math_bad} 个：polish_math 应还原成 ASCII + m:sty")
+    fail(f"非希腊粗体的数学字母码位 {uni_math_bad} 个：polish_math 应还原成 ASCII + m:sty")
 print(f"m:t 中反斜杠 {backslash}、美元符 {dollar}（应为 0）；m:mtext {mtext}（应为 0）")
 print(f"m:t 中 NBSP {nbsp}（应为 0）、EM SPACE {emsp}（\\qquad 正常产物，不计入违规）")
 print(f"结构计数：m:d {d}、m:m {mm}、m:nary {nary}、m:eqArr {doc.count('<m:eqArr')}")
@@ -139,7 +149,7 @@ for _f in _root.iter(MNS + 'f'):
 summary = '、'.join(f'{k} {v}' for k, v in sorted(_ftypes.items())) or '无分式'
 print(f"分式类型：{summary}（其中 lin 单位 {_lin_unit} 条，走 m/s 斜杠形式，属预期）")
 if _lin_bad:
-    print(f"[FAIL] {_lin_bad} 个 lin 分式的分子或分母含斜体：真除法被排成了压扁的斜杠")
+    fail(f"{_lin_bad} 个 lin 分式的分子或分母含斜体：真除法被排成了压扁的斜杠")
 
 # 空槽：XSL 把 m:d 内非定界符的 mo 当 sepChr，括号后紧跟负号时第一段 m:e 是空的，
 # Word 画成空槽方框。引擎的 _fix_delims 已把该字符挪回正文，这里查回归与存量。
@@ -151,4 +161,11 @@ for _dd in _root.iter(MNS + 'd'):
     if _ch and any(len(_e) == 0 for _e in _dd if _e.tag == MNS + 'e'):
         _empty_d.append(_ch)
 if _empty_d:
-    print(f"[FAIL] {len(_empty_d)} 个 m:d 有空槽（分隔符 {''.join(sorted(set(_empty_d)))}）：_fix_delims 未生效")
+    fail(f"{len(_empty_d)} 个 m:d 有空槽（分隔符 {''.join(sorted(set(_empty_d)))}）：_fix_delims 未生效")
+
+# 闸门：任何一条不合格都退 1。重建/交付脚本与人一样只看退出码，
+# 所以这里不能只是打印——打印过的东西没人会回头数。
+if _FAILS:
+    print(f"审计不通过：{len(_FAILS)} 项不合格")
+    sys.exit(1)
+print("审计通过：四项硬指标全过")
