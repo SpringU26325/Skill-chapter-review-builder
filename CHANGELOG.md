@@ -23,7 +23,7 @@
 
 ### 实测
 
-- **新规则对存量零误报**：72 份源稿全量 lint，`_check_container_kind` 与 `_check_dollar_blocks` **0 命中**；总计 ERROR 69 / WARN 428 全部来自既有规则（行内矩阵、某节缺题等），与本次改动无关。存量源稿里本就没有孤行 `$$`、行中 `$$`、缩进 `@header`（扫描确认）。
+- **新规则对存量零误报**：75 个 md（74 册源稿 + `线性代数_notation.md`）全量 lint，`_check_container_kind` 与 `_check_dollar_blocks` **0 命中**；总计 ERROR 69 / WARN 428 全部来自既有规则（行内矩阵、某节缺题等），与本次改动无关。存量源稿里本就没有孤行 `$$`、行中 `$$`、缩进 `@header`（扫描确认）。
 - **构造样例全部拦下**：孤行 `$$` 两处、行中 `$$x^2$$`、`:::tip` 各报一条 ERROR，退出码 2。
 - **未知容器不崩**：含 `:::tip` 的样例构建退出码 0，stderr 打出降级提示，成品正常保存。
 - **裸文件名可写**：`复习资料_build.py t.md out.docx` 在当前目录产出 39 KB docx（旧脚本同一命令抛 `FileNotFoundError: ''`）。
