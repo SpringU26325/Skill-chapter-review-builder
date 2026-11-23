@@ -87,7 +87,7 @@ git clone https://github.com/SpringU26325/Skill-chapter-review-builder.git chapt
 
 ## 版本与升级
 
-当前版本 **2.7.11**（工作区版本；最近一次对外发版是 v2.7.9，见 `RELEASE_NOTES.md`）。逐版明细见 `CHANGELOG.md`。
+当前版本 **2.7.11**，最近一次对外发版即 `v2.7.11`（2026-11-23，纯文档版：`scripts\` 未改，无需重建）。逐版明细见 `CHANGELOG.md`，升级注意见 `RELEASE_NOTES.md`。
 
 从 v2.7.0 或更早升级，先看四条：
 
