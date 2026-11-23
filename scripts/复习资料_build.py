@@ -719,6 +719,87 @@ def _fix_delims(el):
     return n
 
 
+# 会被 XSL 掏空的参数槽：父节点 -> 该父节点下允许补 ZWSP 的槽名。
+# 只收「结构上允许为空、空了却难看」的槽；m:d 交给 _fix_delims，m:f/m:rad 的
+# 空分子分母是真缺内容，留着让 audit 报，不在这里掩盖。
+_EMPTY_SLOT_FIX = (
+    ('sSup', ('e',)),
+    ('sSub', ('e',)),
+    ('sSubSup', ('e',)),
+    ('sPre', ('e',)),
+    ('nary', ('e', 'sub', 'sup')),
+)
+
+# 槽里出现这些结构元素时不再算「空」：那是内容被转坏（如 `(\sin x)'` 的括号被
+# 掏空成 m:d），补零宽字符只会把坏结构抹掉，让问题更难查。
+_STRUCT_TAGS = ('d', 'f', 'm', 'rad', 'nary', 'eqArr', 'func', 'groupChr',
+                'limLow', 'limUpp', 'sSup', 'sSub', 'sSubSup', 'sPre',
+                'acc', 'bar', 'box', 'borderBox', 'phant')
+
+
+def _has_structure(e):
+    """槽内是否还有嵌套公式结构（说明不是「空」，是内容丢失或粘连）。"""
+    for node in e.iter():
+        if node is e:
+            continue
+        tag = node.tag
+        if isinstance(tag, str) and tag.startswith('{%s}' % NS_M) and \
+                tag.split('}')[1] in _STRUCT_TAGS:
+            return True
+    return False
+
+
+def _hidden_slots(node):
+    r"""nary 的上下限是否被关掉：`supHide`/`subHide` 为 on 时 Word 不画那一格，
+    空着属于正常（`\sum_i` 的 sup 就是空的），补零宽字符只是噪声。"""
+    pr = node.find('{%s}naryPr' % NS_M)
+    if pr is None:
+        return ()
+    out = []
+    for slot, key in (('sub', 'subHide'), ('sup', 'supHide')):
+        e = pr.find('{%s}%s' % (NS_M, key))
+        if e is not None and e.get('{%s}val' % NS_M) == 'on':
+            out.append(slot)
+    return tuple(out)
+
+
+def _fix_empty_base(el):
+    r"""空参数槽填零宽字符：别让 Word 画点线方框。
+
+    latex2mathml 把紧贴上下标的细空 `\,` 当成底数——`0\,^\circ` 里 mspace 是
+    `m:e`，MML2OMML.XSL 又把 mspace 丢掉，于是 `m:sSup` 的底数成了空槽。Word
+    把空槽画成点线小方框（打印时留 ≈1 个字宽的空白）。同族另有三形：数字写在
+    数学外造成的空下标（`C$_{60}$`）、空 run 做底数（`$^{147}\mathrm{Sm}$`）、
+    裸算子（`$-\int_a^x$` 没有被积函数）。
+
+    修法统一：给空槽塞一个零宽空格 run。槽里有「看不见的实体」，Word 就不再
+    认为它是空参数，方框与多出的间距一起消失；源稿一个字都不用改。
+    """
+    n = 0
+    for name, slots in _EMPTY_SLOT_FIX:
+        for node in el.iter('{%s}%s' % (NS_M, name)):
+            hide = _hidden_slots(node) if name == 'nary' else ()
+            for slot in slots:
+                if slot in hide:
+                    continue        # nary 的上下限被 supHide/subHide 关掉了，空着也不画
+                e = node.find('{%s}%s' % (NS_M, slot))
+                if e is None:
+                    continue
+                if ''.join(e.itertext()).strip():
+                    continue        # 槽里有可见字符（含零宽字符）就不算空
+                if _has_structure(e):
+                    continue        # 槽里嵌着公式结构：内容被转坏了，别在这里抹平
+                for c in list(e):   # 槽里只剩空 run（`<m:r><m:t/></m:r>`）也要换掉
+                    e.remove(c)
+                r = _mk('r')
+                t = _sub(r, 't')
+                t.text = '\u200b'
+                t.set(XML_SPACE, 'preserve')
+                e.append(r)
+                n += 1
+    return n
+
+
 def _fix_operators(el):
     """算子名（sin、lim…）排正体，极限类的下标压到正下方。"""
     n = 0
@@ -853,6 +934,7 @@ def add_math(p, tex, size=None):
     _fix_delims(el)
     _fix_operators(el)
     _bold_greek(el)
+    _fix_empty_base(el)          # 最后一步：别的修正可能整段换掉槽里的内容
     if not p.runs:
         # 段落里只有公式时，Word 会当成独立公式居中显示（表格单元格因此对不齐）；
         # 垫一个零宽字符把它压回行内，左对齐交给段落自身的 jc 决定。
