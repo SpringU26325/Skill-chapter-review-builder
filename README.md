@@ -85,6 +85,17 @@ git clone https://github.com/SpringU26325/Skill-chapter-review-builder.git chapt
 
 用 GitHub 的 `Code → Download ZIP` 亦可，解压后须把目录名改为 `chapter-review-builder`（压缩包默认带 `-main` 后缀，目录名即 skill 名）。
 
+## 版本与升级
+
+当前版本 **2.7.9**。逐版明细见 `CHANGELOG.md`，发版说明见 `RELEASE_NOTES.md`。
+
+从 v2.7.0 或更早升级，先看四条：
+
+1. **audit 会退 1 了**（2.7.6 起）。2.7.2 之前产出、没重建的 5 份册子会判红（线代第 10 章上 / 第 8 章中、高数第 2 章上 / 第 2 章中 / 第 4 章中）——存量空槽显形，重建即绿，不是新坏。
+2. **两处字形修复要重建才生效**：`\left(-\frac…\right)` 的空槽方框（2.7.2）、`0\,^\circ` 的点线方框与 9.7 pt 空隙（2.7.8）。全量重建：`复习资料_重建.py --all --pdf`。
+3. **写法收紧**：除单位外一律 `\frac`（2.7.4）；`$$` 必须与公式同行、容器类型只能是七个（2.7.9 起 lint 报 ERROR）。
+4. **`init` 变更**：缺 `_配置.md` 时立即补建并从 `@sub` 预填主干候选，另生成 `_踩坑清单.md` 骨架（2.7.1 / 2.7.5）。
+
 ## 环境
 
 | 项 | 要求 |
