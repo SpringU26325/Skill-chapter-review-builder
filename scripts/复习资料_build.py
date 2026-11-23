@@ -1535,6 +1535,11 @@ class Builder:
         self._try_anchor(p, text)
 
     def container(self, kind, title, inner):
+        if kind not in FILL:
+            # 未知类型以前直接 KeyError 裸崩（P1-2）；降级成 box 并喊一声，让构建跑完
+            print('  !! 未知容器类型 %s，按 box 处理（可用：%s）'
+                  % (kind, ' / '.join(FILL)), file=sys.stderr)
+            kind = 'box'
         fill, bar = FILL[kind], BAR[kind]
         tbl = self.doc.add_table(rows=1, cols=1)
         tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -1709,8 +1714,12 @@ class Builder:
                 i += 1
                 continue
             if s.startswith('$$'):
+                tex = s.strip('$').strip()
+                if not tex:
+                    MATH_FAIL.append('容器内孤行 $$（引擎只认单行 $$…$$）')
+                    i += 1
+                    continue
                 flush()
-                tex = s.strip('$')
                 p = cell.add_paragraph()
                 p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 p.paragraph_format.space_before = Pt(4); p.paragraph_format.space_after = Pt(4)
@@ -1857,7 +1866,14 @@ def render(b: Builder, lines):
         elif s.startswith('### '):
             flush(); b.h3(s[4:].strip())
         elif s.startswith('$$'):
-            flush(); b.math(s.strip('$'))
+            tex = s.strip('$').strip()
+            if not tex:
+                # 孤行 $$ 的 strip('$') 是空串：add_math('') 产出空公式，公式内容静默降级成
+                # 正文文本，audit 还是绿的（P0-2）。这里拦下并计入公式失败，别让它静默坏。
+                flush()
+                MATH_FAIL.append('孤行 $$（引擎只认单行 $$…$$）')
+                i += 1; continue
+            flush(); b.math(tex)
         elif s.startswith('!['):
             # 图片必须独占一行且单独成段：落进 buf 会被 flush() 用空格拼进正文段落，
             # 图就插不进来（这是本分支要放在 else 之前的原因）。
@@ -2049,11 +2065,13 @@ def pick_header(lines, md_path):
     让页眉跟着 md 走（单一真相），外部就不需要维护清单文件——
     多科目并发时也就没有共享可变文件可抢。"""
     for ln in lines:
+        ln = ln.strip()               # 缩进过的 @header 以前认不出，页眉静默回退（P2-2）
         if ln.startswith('@header '):
             return ln[8:].strip()
     base = os.path.basename(md_path)
     subj = base.split('_')[0] if '_' in base else ''
     for ln in lines:
+        ln = ln.strip()
         if ln.startswith('# '):
             title = ln[2:].strip()
             return f'{subj} · {title}' if subj else title
@@ -2102,7 +2120,9 @@ def main():
         polish_math(b.doc)
         trim_trailing_empty(b.doc)
         import os
-        os.makedirs(os.path.dirname(OUT), exist_ok=True)
+        out_dir = os.path.dirname(OUT)
+        if out_dir:                    # 裸文件名时 dirname 是空串，makedirs('') 会崩（P1-3）
+            os.makedirs(out_dir, exist_ok=True)
         try:
             b.doc.save(OUT)
             print("saved:", OUT)

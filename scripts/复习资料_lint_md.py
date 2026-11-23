@@ -252,6 +252,49 @@ def _check_container_balance(text):
     return errs
 
 
+def _check_container_kind(lines, code_lines):
+    """::: 类型必须在引擎的 FILL 表里，否则构建直接 KeyError 裸崩（P1-2）。
+
+    配对检查只数开合，不管类型；`:::tip 提示` 能过 lint，到构建才炸，
+    traceback 里也没有「可用哪几种」的信息。
+    """
+    kinds = ('goal', 'box', 'note', 'warn', 'code', 'quiz', 'flow')  # 与 build.FILL 同步
+    errs = []
+    for i, line in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        m = re.match(r'^:::([a-zA-Z]\w*)', line.strip())
+        if m and m.group(1) not in kinds:
+            errs.append(f'  ERROR L{i}: 未知容器类型 :::{m.group(1)}——构建会因 KeyError 中断；'
+                        f'可用：{" / ".join(kinds)}')
+    return errs
+
+
+def _check_dollar_blocks(lines, code_lines):
+    """`$$` 只有「单行 $$…$$」一种写法能正确成块。
+
+    引擎逐行解析：孤行 $$ 的 strip('$') 是空串，产出空公式、公式内容降级成正文文本；
+    行中 $$ 只从第二个 $ 起配对，两个孤儿 $ 落进正文。两者 audit 都查不出（P0-2 / P0-3）。
+    """
+    errs = []
+    for i, line in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        s = line.strip()
+        if not s or '$' not in s:
+            continue
+        if s.startswith('$$'):
+            if s == '$$':
+                errs.append(f'  ERROR L{i}: 孤行 $$ 不构成公式——引擎产出空公式、内容静默降级成正文；'
+                            f'改写成单行 $$…$$')
+            elif not s.endswith('$$'):
+                errs.append(f'  ERROR L{i}: $$ 块首尾不在同一行——引擎按单行解析，尾部会漏成正文；'
+                            f'改写成单行 $$…$$')
+        elif '$$' in s:
+            errs.append(f'  ERROR L{i}: 行中 $$ 会把美元符印进正文；显示公式改为独占一行 $$…$$')
+    return errs
+
+
 def _code_blocks(lines):
     """按整块判定 :::code，与引擎 _render_code 一致：块内任一行带树符即整块算树。
 
@@ -613,6 +656,9 @@ def check_file(path):
                 out.append(f'  WARN  L{i}: {msg}')
                 out.append(f'        | {s[:100]}')
     for e in _check_container_balance(text):
+        n_err += 1
+        out.append(e)
+    for e in _check_container_kind(lines, code_lines) + _check_dollar_blocks(lines, code_lines):
         n_err += 1
         out.append(e)
     for e in _check_tree_depth(lines):
