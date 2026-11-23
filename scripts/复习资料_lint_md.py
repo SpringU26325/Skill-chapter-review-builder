@@ -284,12 +284,13 @@ def _check_dollar_blocks(lines, code_lines):
         if not s or '$' not in s:
             continue
         if s.startswith('$$'):
-            if s == '$$':
-                errs.append(f'  ERROR L{i}: 孤行 $$ 不构成公式——引擎产出空公式、内容静默降级成正文；'
-                            f'改写成单行 $$…$$')
+            body = s.strip('$').strip()
+            if not body:
+                errs.append(f'  ERROR L{i}: 空 $$ 块（孤行或只有美元符）——引擎产出空公式、'
+                            f'内容静默降级成正文；改写成单行 $$…$$')
             elif not s.endswith('$$'):
-                errs.append(f'  ERROR L{i}: $$ 块首尾不在同一行——引擎按单行解析，尾部会漏成正文；'
-                            f'改写成单行 $$…$$')
+                errs.append(f'  ERROR L{i}: $$ 块没有在本行闭合（首尾不在同一行，或行尾还有文字）'
+                            f'——引擎按单行解析，尾部会漏成正文；改写成单行 $$…$$')
         elif '$$' in s:
             errs.append(f'  ERROR L{i}: 行中 $$ 会把美元符印进正文；显示公式改为独占一行 $$…$$')
     return errs
