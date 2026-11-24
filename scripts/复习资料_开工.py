@@ -13,7 +13,7 @@
     "<py>" "<skill>\\scripts\\复习资料_开工.py" --json       # 结构化，供别的脚本消费
     "<py>" "<skill>\\scripts\\复习资料_开工.py" --full       # 附进度表全部行
 
-退出码：0 正常；2 缺 `_台帐.md` / `_配置.md`（先跑 `复习资料_init.py`）。
+退出码：0 正常；2 缺 `_台账.md` / `_配置.md`（先跑 `复习资料_init.py`）。
 """
 import json
 import os
@@ -34,20 +34,43 @@ def _read(path):
         return ''
 
 
-def _section(text, title_prefix):
-    """取 `## <title_prefix>…` 到下一個 `## ` 之间的正文（不含标题行）。"""
+def _section(text, *titles):
+    """取 `## <标题>` 到下一个 `## ` 之间的正文（不含标题行）。
+
+    `titles` 是别名组，顺序即优先级。**先全组精确等同，再全组前缀匹配**——
+    否则「进度」会先前缀命中旧台账的「## 进度摘要」而漏掉真正的「## 已完成明细」。
+    """
     lines = text.split('\n')
-    out, on = [], False
-    for s in lines:
-        if s.startswith('## '):
-            if on:
-                break
-            if s[3:].strip().startswith(title_prefix):
-                on = True
-                continue
-        if on:
-            out.append(s)
-    return out
+    heads = [(i, s[3:].strip()) for i, s in enumerate(lines) if s.startswith('## ')]
+
+    def grab(k):
+        start = heads[k][0] + 1
+        end = heads[k + 1][0] if k + 1 < len(heads) else len(lines)
+        return lines[start:end]
+
+    for want in titles:
+        for k, (_, name) in enumerate(heads):
+            if name == want:
+                return grab(k)
+    for want in titles:
+        for k, (_, name) in enumerate(heads):
+            if name.startswith(want):
+                return grab(k)
+    return []
+
+
+def _col_map(head):
+    """表头 → 列下标。按列名取，列序变了也不会读错位。"""
+    return {h: i for i, h in enumerate(head)}
+
+
+def _cell(row, mp, *names):
+    """按候选列名取一格；缺列返回空串，不抛。"""
+    for n in names:
+        i = mp.get(n)
+        if i is not None and i < len(row):
+            return row[i]
+    return ''
 
 
 def _bullets(lines, limit=8):
@@ -85,33 +108,53 @@ def read_config(prod):
     """主干表：科目 / 主干文件 / 位置 / 类型 / 编号单位 / 页码换算。"""
     text = _read(os.path.join(prod, '_配置.md'))
     head, rows = _table(_section(text, '主干'))
+    mp = _col_map(head)
     out = []
     for r in rows:
-        if len(r) < 6 or r[0] in ('科目',):
+        subj = _cell(r, mp, '科目')
+        if not subj or subj == '科目':
             continue
-        out.append({'科目': r[0], '主干': r[1].strip('`'),
-                    '位置': r[2].strip('`'), '类型': r[3],
-                    '编号单位': r[4], '页码换算': r[5]})
+        out.append({'科目': subj,
+                    '主干': _cell(r, mp, '主干文件', '主干').strip('`'),
+                    '位置': _cell(r, mp, '位置').strip('`'),
+                    '类型': _cell(r, mp, '类型'),
+                    '编号单位': _cell(r, mp, '编号单位'),
+                    '页码换算': _cell(r, mp, '页码换算')})
     return out
 
 
 def read_ledger(prod):
-    """进度表 + 未做与下一章 / 待办 / 最近交付。"""
+    """进度表 + 未做与下一章 / 待办 / 最近交付。
+
+    2.9.0 前的旧台账没有「## 进度」，只有「## 进度摘要（叙述）」与
+    「## 已完成明细（六列，列名与语义都不同）」。这里按列名适配旧表
+    （`章节 / 册`、`原文页码范围`、`成品页数`），并把 legacy 报给上层——
+    宁可让模型看见「这是旧格式」，也不要静默给出空表。
+    """
     text = _read(os.path.join(prod, '_台账.md'))
-    head, rows = _table(_section(text, '进度'))
+    body = _section(text, '进度', '已完成明细')
+    legacy = not any(s.startswith('## 进度') and not s.startswith('## 进度摘要')
+                     for s in text.split('\n'))
+    head, rows = _table(body)
+    mp = _col_map(head)
     chapters = []
     for r in rows:
-        if len(r) < 5 or r[0] == '科目':
+        subj = _cell(r, mp, '科目')
+        if not subj or subj == '科目':
             continue
-        pages = [x for x in r[4].split('/') if x.strip()]
-        chapters.append({'科目': r[0], '章节': r[1], '页码': r[2],
-                         '分册': r[3], '册数': max(len(pages), 1)})
+        pages = _cell(r, mp, '成品页', '成品页数')
+        chapters.append({'科目': subj,
+                         '章节': _cell(r, mp, '章节', '章节 / 册'),
+                         '页码': _cell(r, mp, '页码', '原文页码范围'),
+                         '分册': _cell(r, mp, '分册'),
+                         '册数': max(len([x for x in pages.split('/') if x.strip()]), 1)})
     m = re.search(r'\*\*最近交付\*\*[：:]\s*(.+)', text)
     return {
         'chapters': chapters,
+        'legacy': legacy,
         '最近': m.group(1).strip() if m else '',
         '未做': _bullets(_section(text, '未做')),
-        '待办': _bullets(_section(text, '待办')),
+        '待办': _bullets(_section(text, '待办', '已知待办')),
     }
 
 
@@ -131,12 +174,20 @@ def read_pitfalls(prod):
 
 
 def read_defects(prod):
-    """从头部一句「状态：N 条未修（P0-4、P2-3、P2-5）」抽未修清单。"""
-    head = _read(os.path.join(prod, '_待修缺陷.md'))[:600]
-    m = re.search(r'状态[:：]\s*(\d+)\s*条未修[（(]([^）)]*)[）)]', head)
-    if m:
-        return {'数量': int(m.group(1)), '条目': m.group(2)}
-    return {'数量': 0, '条目': ''}
+    """从头部「**状态：N 条未修**（P0-4、…）」抽未修清单。
+
+    措辞要放宽：`状态：` 常被加粗，`条未修` 与括号之间会夹 `**`
+    （`> **状态：4 条未修**（P0-4…）`）。严格贴括号的正则会一条都读不到，
+    而这个数字正是最该保住的信息——宁可放宽，读到 0 也要当可疑。
+    """
+    text = _read(os.path.join(prod, '_待修缺陷.md'))
+    head = text.split('\n## ')[0][:2000]     # 只取首节，不整读
+    m = re.search(r'(\d+)\s*条未修', head)
+    if not m:
+        return {'数量': 0, '条目': ''}
+    b = re.search(r'条未修[*\s]*[（(]([^）)]*)[）)]', head)
+    items = [x.strip() for x in b.group(1).split('、') if x.strip()] if b else []
+    return {'数量': int(m.group(1)), '条目': '、'.join(items)}
 
 
 def read_pending(prod):
@@ -192,6 +243,9 @@ def render(data, root, full=False):
 
     out.append('')
     out.append('【进度】章数 / 册数（册数按成品页列拆 /）')
+    if led['legacy']:
+        out.append('  [!] 台账是 2.9.0 之前的格式（无「## 进度」节），下面按旧表列名尽力读——'
+                   '可能不准。按 RELEASE-2.9.0.md 的迁移段整理一次再接手。')
     by = {}
     for c in led['chapters']:
         g = by.setdefault(c['科目'], {'章': set(), '册': 0})
@@ -200,6 +254,8 @@ def render(data, root, full=False):
     if by:
         out.append('  ' + '｜'.join(f'{s} {len(g["章"])} 章 {g["册"]} 册' for s, g in by.items())
                    + (f'；最近 {led["最近"][:34]}' if led['最近'] else ''))
+    else:
+        out.append('  暂无已交付章节。')
     if full:
         for c in led['chapters']:
             out.append(f'   {c["科目"]} {c["章节"]} p{c["页码"]} {c["分册"]}')
@@ -220,7 +276,8 @@ def render(data, root, full=False):
         for p in pits:
             if p['节'].startswith('目录'):
                 continue
-            out.append(f'  {p["节"][:30]}  L{p["起"]}-{p["止"]} {p["字"] // 1000 or 1}k')
+            size = f'{p["字"] // 1000}k' if p['字'] >= 1000 else f'{p["字"]}字'
+            out.append(f'  {p["节"][:30]}  L{p["起"]}-{p["止"]} {size}')
 
     out.append('')
     out.append('【下一步】章节与主干未指定先问用户；进度只写 _台账.md。')
