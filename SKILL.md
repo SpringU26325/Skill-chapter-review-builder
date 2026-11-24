@@ -1,6 +1,6 @@
 ---
 name: chapter-review-builder
-version: 2.7.11
+version: 2.8.0
 description: 单章大学课程复习资料（.docx）的制作、返工与质检：从教材 PDF、课堂课件、笔记中提炼知识点、逐点配题、六项自检、页数与空页检查、关键页视觉验收，经自建引擎输出 LaTeX 原生公式的 Word。覆盖新做章节、上/下/中/拓展分册、题库与一页速查，以及已交付资料的重排、补题、核公式、查页数、重新导出。用户口语里说「提纲」「总结」「速查」「知识脉络」「章节结构」时也走这里。不适用于与复习资料无关的通用 Word 排版美化。
 agent_created: true
 ---
@@ -138,7 +138,7 @@ Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。解释器�
 | 交付、多会话协作 | `references/delivery.md` | 构建完成后 |
 | 导出 PDF、页检、并发构建、COM | `references/render.md` | **只在渲染与导出时读**，写 md 阶段不读 |
 | 贴示意图（流程图符号、框图、受力图） | `references/figures.md` | **只在需要插图时读**；表格与公式不走这条通道 |
-| 改引擎本身 | `references/engine.md` | **只在改 `复习资料_build.py` 时读，平时不用看** |
+| 改引擎本身 | `references/engine.md` | **只在改 `scripts\` 下的引擎时读，平时不用看**；先看它的模块地图定位到具体文件 |
 
 `references/` 按阶段拆开就是为按需加载：一次会话通常只读 3–4 份。`sources.md`、`render.md`、`engine.md` 是长尾清单，**不进默认读取路径**——遇到表外后缀、要导出、或改引擎时再单独读，不要在开工时整套读完。
 
