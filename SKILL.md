@@ -113,11 +113,13 @@ Python 依赖：`python-docx`、`latex2mathml`、`lxml`、`pymupdf`。解释器�
 "<py>" "<skill>\scripts\复习资料_渲染.py" --clean           # 目录不止一个时必须写：--clean <目录名>
 ```
 
-**线性代数额外一步**（通用审计不含记号规则，必须单独跑）：
+**科目自带检查脚本**（`scripts\lint\` 下只有一份**样本**：`线性代数_lint.py`）。它查的是学科规则——记号是否登记、"行向量"断言是否自证形状，通用 lint 与 audit 都不含这类判断：
 
 ```bash
 "<py>" "<skill>\scripts\lint\线性代数_lint.py" 线性代数_第1章.md 线性代数_第2章上.md
 ```
+
+它**读工作区的 `线性代数_notation.md`**，换科目要复制改名后重写规则（见 `references/delivery.md` 第六节）。别把它的规则当成通用能力。
 
 退出码 0 = 全过；1 = 有 ERROR，不许交付。WARN 不阻断，但要在自检报告里逐条说明。
 
