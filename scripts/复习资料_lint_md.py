@@ -186,6 +186,23 @@ def _empty_delim_math(line):
     return False
 
 
+def _bar_subscript(line):
+    """`\\bar{z_j}`：上划线会拉宽盖住下标，看着像 z 和 j 都带线。
+
+    `\\bar{z_1z_2}` 是「盖整组」的正当写法，`\\bar{v_x^2}` 盖的是带上下标的整体，
+    两者都不算；只挑「单字母 + 单下标」这一种。
+    """
+    for m in re.finditer(r'\\bar\s*\{([^{}]*)\}', line):
+        if re.fullmatch(r'[A-Za-z]_[A-Za-z0-9]', m.group(1)):
+            return True
+    return False
+
+
+def _det_in_abs(line):
+    """`$|\\det A|$`：\\det 被并进同一个 run，成品是 `|detA|`（连写、失正体）。"""
+    return bool(re.search(r'\|\s*\\det\s*[A-Za-z]', line))
+
+
 # (级别, 说明, 正则/判定函数)
 RULES = [
     ('ERROR', r'表格行内公式里出现裸 |（行内公式外的列分隔符不算），改 \vert',
@@ -222,6 +239,11 @@ RULES = [
      re.compile(r'─{3,}')),
     ('WARN', r'长行内公式含 = 连等式，易被 Word 折断，拆短用文字连',
      _long_inline_eq),
+    ('WARN', r'\bar{z_j} 上划线会拉宽盖住下标（看着像 z 和 j 都带线），写 \bar{z}_j；'
+             r'\bar{z_1z_2} 是盖整组、不算',
+     _bar_subscript),
+    ('WARN', r'|det A| 会被并成 |detA|（连写、失正体），改 $|A|$ 或 \left|\det A\right|',
+     _det_in_abs),
 ]
 
 
@@ -531,6 +553,205 @@ IMG_DPI = 300.0
 PAGE_W_CM = 16.6
 
 
+# ---------- 结构完整性（2.9.0）----------
+# 这一组不查公式写法，查「成品的骨架会不会错位」。引擎对这些一律不报错：
+# 表格在容器里被拼成一行竖线、速查卡不在最后、题卡漏了答案行——构建全绿，打开才发现。
+
+def _is_chapter(lines):
+    """章节稿判定：首个非空行是「# …章」。记号表、清单之类不跑结构检查。"""
+    for s in lines:
+        t = s.strip()
+        if not t:
+            continue
+        return t.startswith('# ') and '章' in t
+    return False
+
+
+def _quiz_blocks(lines):
+    """产出 (起始行, [(行号, 去掉空白的行)])：每个 :::quiz 块的内容行。"""
+    out, cur, start = [], None, 0
+    for i, s in enumerate(lines, 1):
+        t = s.strip()
+        if t.startswith(':::quiz'):
+            cur, start = [], i
+            continue
+        if cur is not None and t == ':::':
+            out.append((start, cur))
+            cur = None
+            continue
+        if cur is not None:
+            cur.append((i, t))
+    return out
+
+
+def _check_quiz_rows(lines):
+    """题卡三行固定：`**题**` → `**提示**` → `**答案**`，题与答案必写。
+
+    漏 `**答案**` 或顺序颠倒时引擎照常排，成品里三行当普通段落堆着，
+    题卡样式还在、内容却不是题卡结构；lint 与 audit 都不会说话。
+    """
+    errs = []
+    all_gaps = []
+    order = {'**题**': 0, '**提示**': 1, '**答案**': 2}
+    for start, body in _quiz_blocks(lines):
+        tags = []
+        for ln, t in body:
+            for k in order:
+                if t.startswith(k):
+                    tags.append((ln, k))
+                    break
+        if not tags:
+            errs.append(f'  ERROR L{start}: :::quiz 里没有 **题** / **答案** 行——'
+                        f'题卡会退化成普通段落；按 `**题**` → `**提示**` → `**答案**` 写')
+            continue
+        names = [k for _, k in tags]
+        if '**题**' not in names:
+            errs.append(f'  ERROR L{start}: 题卡缺 **题** 行，只剩提示/答案')
+        if '**答案**' not in names:
+            errs.append(f'  ERROR L{start}: 题卡缺 **答案** 行——三行固定里题与答案必写，'
+                        f'提示可省；补 `**答案** …`')
+        seq = [order[k] for k in names]
+        if seq != sorted(seq):
+            errs.append(f'  ERROR L{start}: 题卡三行顺序错（现为 {" → ".join(names)}）'
+                        f'——按 `**题**` → `**提示**` → `**答案**` 重排')
+        # 标签之间空行会把题卡拆段、整块变高。存量普遍如此，逐处报会刷屏，
+        # 每册汇总一条——要修时按行号回查。
+        all_gaps += [tags[k][0] for k in range(len(tags) - 1)
+                     if tags[k + 1][0] - tags[k][0] > 1]
+    if all_gaps:
+        head = '、'.join(f'L{x}' for x in all_gaps[:6]) + ('…' if len(all_gaps) > 6 else '')
+        errs.append(f'  WARN  L{all_gaps[0]}: 本册 {len(all_gaps)} 处题卡标签间有空行（{head}）——'
+                    f'空行把题卡拆成多段、整块变高；返工时顺手删掉')
+    return errs
+
+
+def _check_skeleton(lines, code_lines):
+    """骨架：`@sub` 必须紧跟章标题；`@sub` / `@header` 各占一行且带空格。"""
+    errs = []
+    head_i = next((i for i, s in enumerate(lines) if s.strip()), 0)
+    if not lines[head_i].startswith('# '):
+        return errs                      # 非章节稿，不查
+    window = lines[head_i:head_i + 6]
+    sub = [i for i, s in enumerate(window) if s.strip().startswith('@sub')]
+    if not sub:
+        errs.append(f'  ERROR L{head_i + 1}: 章标题后 5 行内没有 @sub——'
+                    f'本册主干与页码区间会退回「文件名 · 首行标题」兜底，成品页眉与实际主干对不上')
+        return errs
+    if sub[0] == 0:
+        errs.append(f'  ERROR L{head_i + 1 + sub[0]}: @sub 紧贴标题行，中间缺空行（Markdown 需要空行才分段）')
+    for i, s in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        t = s.strip()
+        if (t.startswith('@sub') or t.startswith('@header')) and not t.startswith(('@sub ', '@header ')):
+            errs.append(f'  ERROR L{i}: `{t[:24]}` 缺空格——引擎按 `@sub ` / `@header ` 前缀匹配，'
+                        f'缺空格会被当正文印进成品')
+    return errs
+
+
+def _check_speed_last(lines):
+    """`## 一页速查` 必须是最后一个二级块。
+
+    引擎只在速查卡处断页；速查后面再挂别的 `##`，速查卡会被挤到中段，
+    末页变成半页正文——版式约定（速查收尾）破了，但不报错。
+    """
+    h2 = [(i + 1, s[3:].strip()) for i, s in enumerate(lines) if s.startswith('## ')]
+    fast = [k for k, (_, name) in enumerate(h2) if '速查' in name]
+    if not fast:
+        return [f'  ERROR L?: 没有 `## 一页速查`——速查卡是交付物的一部分']
+    if fast[-1] != len(h2) - 1:
+        nxt = h2[fast[-1] + 1][1]
+        return [f'  ERROR L{h2[fast[-1]][0]}: `## 一页速查` 后面还有 `## {nxt[:20]}`——'
+                f'速查卡必须是最后一块，否则末页被别的正文占掉；把速查移到末尾']
+    return []
+
+
+def _check_heading_level(lines, code_lines):
+    """`###` 前面必须先有 `##`，否则大纲层级断开、导航窗格错位。"""
+    errs, seen_h2 = [], False
+    for i, s in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        if s.startswith('## '):
+            seen_h2 = True
+        elif s.startswith('### ') and not seen_h2:
+            errs.append(f'  ERROR L{i}: 出现 `###` 但上面还没有任何 `##`——'
+                        f'大纲从 3 级起跳，Word 导航窗格与折叠会错位；先补所属的 `## 节`')
+    return errs
+
+
+def _check_container_table(lines):
+    """容器内不能写 Markdown 表格。
+
+    引擎 `_render_blocks` 只认图片 / `$$` / 列表 / 空行，其余一律当段落文本
+    `"".join()` 拼起来——`| 场景 | 公式 |` 三行会变成一整条竖线流水。
+    表格解析只在顶层做（`md_table`）。构建、lint、audit 全绿，打开才发现。
+    """
+    errs, kind, start = [], None, 0
+    for i, s in enumerate(lines, 1):
+        t = s.strip()
+        m = re.match(r'^:::([a-zA-Z]\w*)', t)
+        if m:
+            kind, start = m.group(1), i
+            continue
+        if kind and t == ':::':
+            kind = None
+            continue
+        if kind and kind != 'code' and t.startswith('|') and t.count('|') >= 2:
+            if not errs or errs[-1][0] != start:
+                errs.append((start, f'  ERROR L{i}: :::{kind} 里有 Markdown 表格——'
+                                    f'容器内表格会被拼成一条竖线文本（引擎只在顶层解析表格）；'
+                                    f'把表格移到容器外，或删掉容器改用正文表格'))
+    return [e[1] for e in errs]
+
+
+def _strip_ticks(t):
+    """去掉行内反引号里的内容：文档举例（`\\begin{bmatrix}`）不是真写法。"""
+    return re.sub(r'`[^`]*`', '', t)
+
+
+def _check_table_matrix(lines, code_lines):
+    """表格单元格里不要放 `\\begin{…}`：行会被撑到 2–3 倍高、中文被挤断。"""
+    errs = []
+    for i, s in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        t = _strip_ticks(s.strip())
+        if t.startswith('|') and '\\begin{' in t:
+            errs.append(f'  ERROR L{i}: 表格单元格里放了 \\begin{{…}}（矩阵/环境）——'
+                        f'行高会变成 2–3 倍且挤断中文；改写成「三行依次是 (1,0,0)…」这类文字描述')
+    return errs
+
+
+def _check_left_abs_bmatrix(lines, code_lines):
+    """`\\left| … \\begin{bmatrix} … \\right|` 转换器抛 ExtraLeftOrMissingRightError。"""
+    errs = []
+    for i, s in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        t = _strip_ticks(s)
+        if '\\left|' in t and '\\begin{bmatrix}' in t:
+            errs.append(f'  ERROR L{i}: 行列式套在绝对值里（\\left| + bmatrix）——'
+                        f'转换器抛 ExtraLeftOrMissingRightError，成品降级成红色 LaTeX 源码；'
+                        f'行列式单独成块，正文补一句「取绝对值」')
+    return errs
+
+
+def _check_inline_dollar(lines, code_lines):
+    """行内 `$…$` 未闭合：整行剩下的正文会被吞进公式或漏出美元符。"""
+    errs = []
+    for i, s in enumerate(lines, 1):
+        if i in code_lines:
+            continue
+        t = s.strip()
+        if not t or '$$' in t:
+            continue
+        if t.count('$') % 2:
+            errs.append(f'  ERROR L{i}: 行内 $ 未闭合（本行 {t.count("$")} 个）——'
+                        f'后半行会被当公式或印出孤立 $；补齐配对或改成 $$ 块级')
+    return errs
+
+
 def _png_px(path):
     """PNG 的 IHDR 像素宽；读不到返回 None（jpg 不解析）。"""
     try:
@@ -677,6 +898,23 @@ def check_file(path):
             n_err += 1
         out.append(e)
     for e in _check_images(lines, code_lines, path):
+        if e.lstrip().startswith('ERROR'):
+            n_err += 1
+        elif e.lstrip().startswith('WARN'):
+            n_warn += 1
+        out.append(e)
+    # 结构类：只对章节稿跑（记号表 / 清单没有章标题，也不该有速查卡）
+    struct = []
+    if _is_chapter(lines):
+        struct += _check_skeleton(lines, code_lines)
+        struct += _check_quiz_rows(lines)
+        struct += _check_speed_last(lines)
+        struct += _check_heading_level(lines, code_lines)
+    struct += _check_container_table(lines)
+    struct += _check_table_matrix(lines, code_lines)
+    struct += _check_left_abs_bmatrix(lines, code_lines)
+    struct += _check_inline_dollar(lines, code_lines)
+    for e in struct:
         if e.lstrip().startswith('ERROR'):
             n_err += 1
         elif e.lstrip().startswith('WARN'):
