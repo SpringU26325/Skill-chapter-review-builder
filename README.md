@@ -49,22 +49,17 @@
 空工作区先建骨架（幂等，台账不覆盖；不建 .venv、不装库）：
 
 ```bash
-"<py>" "<skill>\scripts\复习资料_init.py" 高等数学 --dry
-"<py>" "<skill>\scripts\复习资料_init.py" 高等数学
+"<py>" "<skill>\scripts\复习资料_init.py" <科目> --dry
+"<py>" "<skill>\scripts\复习资料_init.py" <科目>
 ```
+
+日常只需一条重建命令，`--pdf` 顺带出页数；**并行会话必须带 `--only <册名>`**，否则科目关键字会连坐别人正在改的章：
 
 ```bash
-# 只重建本章，附页数统计（并行会话必须带 --only）
-"<py>" "<skill>\scripts\复习资料_重建.py" --only 高等数学_第6章 --pdf
-
-# md 级前置检查
-"<py>" "<skill>\scripts\复习资料_lint_md.py" 复习资料\_生产\_源稿\高等数学_第6章.md
-
-# 构建后审计
-"<py>" "<skill>\scripts\复习资料_audit.py" <md> <docx>
+"<py>" "<skill>\scripts\复习资料_重建.py" --only <科目>_第<X>章 --pdf
 ```
 
-`<skill>` 指本目录，即 `SKILL.md` 所在层。`<py>` 指工作区 `.venv\Scripts\python.exe`（或用 `CRB_PYTHON` 指定的解释器）——**不要写裸 `python`**，PATH 上那套没有依赖，构建必挂。
+`<skill>` 指本目录（`SKILL.md` 所在层），`<py>` 指工作区 `.venv\Scripts\python.exe` 或 `CRB_PYTHON` 指定的解释器——**不要写裸 `python`**，PATH 上那套没有依赖。其余脚本、参数与退出码见 `SKILL.md` 的「命令速查」。
 
 三层检查，职责不重叠：
 
@@ -105,7 +100,7 @@ git clone https://github.com/SpringU26325/Skill-chapter-review-builder.git chapt
 
 WPS 不支持：接管 `Word.Application` 后 COM 层静默失败，且不带 `MML2OMML.XSL`。页数与 PDF 导出、公式转换各依赖其一。
 
-解释器默认取工作区根目录的 `.venv\Scripts\python.exe`，可用 `CRB_PYTHON` 覆盖；工作区没有 `.venv` 时先由用户指定，脚本不会自建虚拟环境。安装任何新依赖前需征得用户同意。
+解释器默认取工作区根目录的 `.venv\Scripts\python.exe`，可用 `CRB_PYTHON` 覆盖；没有 `.venv` 时先问用户，脚本不会自建虚拟环境，也不会替你装包——取舍规则见 `SKILL.md`「运行环境与依赖」。
 
 ## 已知限制
 
@@ -120,21 +115,10 @@ WPS 不支持：接管 `Word.Application` 后 COM 层静默失败，且不带 `M
 
 ## 目录约定
 
-```text
-复习资料\<科目>\                    本科目素材：主干、真题、笔记、课件等原件
-复习资料\<科目>\_原件.md            本科目原件索引：文件、来源、日期、覆盖、状态
-复习资料\<科目>\_成品\              成品 docx
-复习资料\<科目>\<科目>_学科约定.md  本科目学科口径：记号、术语、单位、与教材的出入
-复习资料\_生产\_源稿\               各章 Markdown、<科目>_notation.md
-复习资料\_生产\_源稿\figures\<科目>\   题图与示意图，索引在同级 _图索引.md
-复习资料\_生产\_render\<科目>_<章节>\  渲染过程文件，交付即清自己那份
-复习资料\_生产\_locks\              并发锁，删了保护失效
-复习资料\_生产\_配置.md             当前配置：主干位置、编号单位、页码基准
-复习资料\_生产\_台账.md             唯一进度真相：页码、分册、成品页数、下一章
-复习资料\_生产\_踩坑清单.md         引擎、公式、COM 的已知问题（`init` 生成骨架）
-复习资料\_生产\_待修缺陷.md         仅 skill 开发仓库有：已查明未修的代码缺陷，使用会话不碰
-```
+目录由 `init` 生成，完整清单与各自职责见 `SKILL.md` 的「工作区目录」表。三件要知道的：
 
-**素材库不是约定目录**：用户已有的书库（如 `Ebooks\`）原地只读使用，位置登记在 `_配置.md` 的「素材库」；主干也可以在工作区外，位置写绝对路径。配置记「现在是什么」，台账记「发生过什么」，两者不重叠。
+- `复习资料\<科目>\` 放本科目原件与 `_成品\`；`复习资料\_生产\_源稿\` 放各章 Markdown 与记号表；
+- `_生产\_配置.md` 记「现在是什么」（主干、编号单位、页码基准），`_生产\_台账.md` 记「发生过什么」（进度、页数），两者不重叠；
+- **素材库不是约定目录**：已有书库（如 `Ebooks\`）原地只读使用，位置登记进配置的「素材库」，不必搬进工作区。
 
-命令细节见 `SKILL.md`，md 方言见 `references/md-dialect.md`，写作风格见 `references/wording.md`。补充资料的文件类型与转换命令见 `references/sources.md`——**按需读**，只在遇到表外后缀时打开。
+md 方言见 `references/md-dialect.md`，写作风格见 `references/wording.md`。补充资料的文件类型与转换命令见 `references/sources.md`——**按需读**，只在遇到表外后缀时打开。
