@@ -22,6 +22,50 @@
 | 页面与样式 | `__init__` `_page` `_styles` `header_footer` | 页面设置、页眉页脚 |
 | 块渲染 | `h1` `h2` `h3` `sub` `para` `math` `_pic` `img` `bullet` `container` `_render_code` `_render_tree` `_render_quiz` `_render_blocks` `md_table` | 每种块一个方法，容器内再分派 |
 
+### 函数行号（基准 v2.9.0）
+
+**改了代码这些行号就会漂**——对不上时按函数名 `grep -n "def 函数名"` 重搜，别信旧行号直接跳。
+有了这张表，定位一个函数只要读它那 30 行，不用把 1300 行的 `build.py` 整读一遍。
+
+### `复习资料_build.py`
+```
+  _subject_of:50  _hold_build_lock:55  _release_build_lock:84  _is_task:119  _nztxt:126  _core:135  _item_label:144
+  add_math:198  add_inline:222  Builder:240  split_containers:1042  render:1064  inject_notation:1141  trim_trailing_empty:1160
+  pick_header:1193  main:1212
+```
+
+### `crb_omml.py`
+```
+  _prep:32  _conv:39  _mk:43  _sub:46  _spacer:52  _thin:60
+  _build_matrix:68  tex2omml:100  _run_upright:142  _part_upright:149  _force_bar:173  _acc_el:204
+  _fix_accents:213  _bold_greek:252  _run_text:282  _set_plain:286  _is_var_start:297  _pad_func_before_var:307
+  _split_func_run:333  _fix_delims:399  _has_structure:455  _hidden_slots:466  _fix_empty_base:479  _fix_operators:515
+  _shrink_omml:555  _char_style:592  _mk_math_run:606  polish_math:632
+```
+
+### `crb_docxkit.py`
+```
+  shade_para:20  border_para:26  set_run:37  set_outline:54  add_bookmark:64  _underline:78
+  add_link:87  link_runs:99  _png_px_width:130  img_width_cm:141  set_cell_border:157  set_cell_shade:172
+  set_table_layout:178
+```
+
+### `复习资料_lint_md.py`
+```
+  _inline_spans:26  _pipe_in_table_math:63  _begin_in_inline_math:74  _multi_dfrac:79  _long_inline_eq:84  _bare_math_in_tree:100
+  _tree_rule_hits:118  _overline_in_math:135  _abs_with_paren:146  _empty_delim_math:158  _bar_subscript:189  _det_in_abs:201
+  _check_container_balance:250  _check_container_kind:277  _check_dollar_blocks:295  _code_blocks:321  _check_tree_depth:350  _check_external_src:390
+  _dd_block_lines:434  _check_engine_math:450  _check_appendix:469  _check_section_tasks:509  _is_chapter:560  _quiz_blocks:570
+  _check_quiz_rows:587  _check_skeleton:628  _check_speed_last:652  _check_heading_level:669  _check_container_table:683  _strip_ticks:708
+  _check_table_matrix:713  _check_left_abs_bmatrix:726  _check_inline_dollar:740  _png_px:755  _check_images:767  check_file:832
+  main:927
+```
+
+### `复习资料_audit.py`
+```
+  fail:30  _all_upright:117
+```
+
 **公式后处理的顺序在 `build.py` 的 `add_math()` 里**，`crb_omml.py` 只提供函数、不决定顺序。改顺序等于改全部成品的字形，先按第五节做全量验证。
 
 ## 一、引擎已自动处理（写内容时不用管，但别绕过）

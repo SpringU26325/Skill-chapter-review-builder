@@ -141,8 +141,9 @@ def read_defects(prod):
 
 def read_pending(prod):
     """配置缺失时给一句准话。"""
+    # 只把「没有就跑不动」的三份算缺；历史与缺陷文件是可选的
     return {n: os.path.isfile(os.path.join(prod, n))
-            for n in ('_配置.md', '_台账.md', '_台账历史.md', '_踩坑清单.md', '_待修缺陷.md')}
+            for n in ('_配置.md', '_台账.md', '_踩坑清单.md')}
 
 
 # ---------- 输出 ----------

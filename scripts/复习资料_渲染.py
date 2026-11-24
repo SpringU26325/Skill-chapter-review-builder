@@ -195,6 +195,39 @@ def prepare(paths):
     print('清理：python 复习资料_渲染.py --clean %s' % name)
 
 
+def _page_risks(page, margin=8):
+    """逐页挑「必须亲眼看」的风险，其余页信任指标即可。
+
+    看着像指标微调，其实是省视觉 token 的关键：一册 10 页全看要 10 张图、
+    每张上千 token；标出风险页后通常只看 2–3 张。判定用实测分布定的阈值
+    （A4 595×842，版心 x∈[62,547]；字/页中位 860–1270，最高实测 1847）：
+
+      - 空页：文字 <40 字（容器整块换页留下的空白页）
+      - 越界：文本块 x1 > 560 或 x0 < 52（矩阵/长公式顶出版心，视觉上被裁）
+      - 图贴底：图片底边距页面底部 <40 pt（图注会被推到下一页）
+    """
+    risks = []
+    rect = page.rect
+    txt = page.get_text().strip()
+    if len(txt) < 40:
+        risks.append('空页')
+    try:
+        for b in page.get_text('blocks'):
+            if b[2] > rect.width - 35 or b[0] < 30:
+                risks.append('越界')
+                break
+    except Exception:
+        pass
+    try:
+        for im in page.get_image_info():
+            if rect.height - im['bbox'][3] < 40:
+                risks.append('图贴底')
+                break
+    except Exception:
+        pass
+    return risks
+
+
 def render(name=None, dpi=140):
     import pymupdf
     out = _run_dir(name)
@@ -209,13 +242,20 @@ def render(name=None, dpi=140):
             continue
         d = pymupdf.open(pdf)
         print('===', os.path.basename(pdf), '|', d.page_count, '页 |', os.path.getsize(pdf), 'bytes')
+        watch = []
         for pi in range(d.page_count):
-            t = d[pi].get_text().strip()
-            flag = '  << 疑似空页' if len(t) < 40 else ''
+            page = d[pi]
+            t = page.get_text().strip()
+            risks = _page_risks(page)
+            if risks:
+                watch.append('p%02d(%s)' % (pi + 1, '/'.join(risks)))
+            flag = ('  << ' + ' / '.join(risks)) if risks else ''
             print('  p%02d: %4d 字%s' % (pi + 1, len(t), flag))
-            pix = d[pi].get_pixmap(dpi=dpi)
+            pix = page.get_pixmap(dpi=dpi)
             png = os.path.join(cache, '%s_p%02d.png' % (os.path.splitext(os.path.basename(pdf))[0], pi + 1))
             pix.save(png)
+        # 只给需要看的页，避免「全册逐页看」把视觉 token 花在没问题的页上
+        print('  看图清单:', '、'.join(watch) if watch else '无风险页（看首页与速查页即可）')
         d.close()
     print('PNG 输出:', cache)
 
