@@ -203,6 +203,25 @@ def _det_in_abs(line):
     return bool(re.search(r'\|\s*\\det\s*[A-Za-z]', line))
 
 
+_EXP_OP = re.compile(r'\\exp(?![A-Za-z])')
+
+
+def _exp_operator(line):
+    """公式里写 \\exp：成品是正体 exp 加括号，不是教材的 e 右上角（9 章下 9.9 节实测）。
+
+    只认数学环境内的 `\\exp`——代码块里的 `sp.exp(`、英文 `expected` 都不算：
+    行内 span 走 _inline_spans，块级走同一行内的 `$$…$$`，两者之外不判。
+    级别是 WARN 不是 ERROR：存量 5 份源稿 15 处（9 章下 9 处、另 4 份 6 处），报 ERROR 会把老册子直接卡死；
+    改写与否由返工决定（md-dialect 第 3 节「指数只有一种写法」）。
+    """
+    if not _EXP_OP.search(line):
+        return False
+    if any(_EXP_OP.search(c) for _, _, c in _inline_spans(line)):
+        return True
+    return any(_EXP_OP.search(m.group(1))
+               for m in re.finditer(r'\$\$([^$]+)\$\$', line))
+
+
 # (级别, 说明, 正则/判定函数)
 RULES = [
     ('ERROR', r'表格行内公式里出现裸 |（行内公式外的列分隔符不算），改 \vert',
@@ -244,6 +263,10 @@ RULES = [
      _bar_subscript),
     ('WARN', r'|det A| 会被并成 |detA|（连写、失正体），改 $|A|$ 或 \left|\det A\right|',
      _det_in_abs),
+    ('WARN', r'公式里写 \exp 会排成正体 exp 加括号（成品是 exp(…)），教材口径是 e 的右上角：'
+             r'改 e^{…}，行内短指数用斜杠（见 md-dialect 第 3 节）；'
+             r'行内长指数上标装不下时可保留 \exp，本条忽略',
+     _exp_operator),
 ]
 
 
