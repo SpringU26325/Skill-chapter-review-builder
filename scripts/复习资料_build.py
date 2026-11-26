@@ -549,12 +549,15 @@ class Builder:
 
         没题就不出行——强制自拟要求每节有题，缺题是源稿缺陷，lint 会报。
         回跳挂在这一行尾，不另起段落：每节多一行约 14pt，二十节就是三成页。
+        固定块（易错点 / 题库 / 速查）是例外：它们本来就没有「对应题目」行，
+        回跳是这一行唯一的内容，不出行就等于速查点进去回不来。
         """
         items = self._qmap.get(sec) or []
         back = self._back_target(hdr)
-        if not items:
-            # 强制自拟：每节至少一道题。缺题是源稿缺陷（lint 报 ERROR），
-            # 不是回跳缺载体——不为回跳单造一行，免得没题的节凭空多占 1 行。
+        fixed = bool(hdr) and hdr['text'] in NAV_BLOCKS
+        if not items and not (fixed and back):
+            # 普通小节：缺题是源稿缺陷（lint 报 ERROR），
+            # 不为回跳单造一行，免得没题的节凭空多占 1 行。
             return
         def _ord(it):
             ns = [int(x) for x in re.findall(r'\d+', it['disp'])]
